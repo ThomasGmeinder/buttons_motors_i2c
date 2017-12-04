@@ -1,0 +1,89 @@
+DEBUG.txt
+
+// Debug:
+// What causes the fricking
+//xrun: Program received signal ET_ILLEGAL_RESOURCE, Resource exception.
+//      0x00041730 in main ()
+
+// XSCOPE ? No
+// case reg.register_changed():? No
+// Something to do with the ports?
+// Works with xgdb but not xrun !???
+// LED only flashes when running with xgdb. 
+
+The trace:
+Motor speed is set to 20 mm/s
+REGFILE update from appliation: reg[2] <- 100
+REGFILE update from appliation: reg[5] <- 100
+REGFILE update from appliation: reg[2] <- 0
+Stopped Motor 1 at position 0 mm
+REGFILE update from appliation: reg[2] <- 0
+Stopped Motor 1 at position 0 mm
+REGFILE update from appliation: reg[2] <- 0
+Stopped Motor 1 at position 0 mm
+REGFILE update from appliation: reg[5] <- 0
+Stopped Motor 2 at position 0 mm
+REGFILE update from appliation: reg[5] <- 0
+Stopped Motor 2 at position 0 mm
+REGFILE update from appliation: reg[5] <- 100
+Stopped Motor 2 at position 100 mm
+REGFILE update from appliation: reg[2] <- 100
+Stopped Motor 1 at position 100 mm
+REGFILE update from appliation: reg[2] <- 100
+Stopped Motor 1 at position 100 mm
+
+
+Issues:
+Conflicting updates of target_position register at the start
+REGFILE update from appliation: reg[2] <- 100
+REGFILE update from appliation: reg[1] <- 100
+REGFILE update from appliation: reg[5] <- 100
+REGFILE update from appliation: reg[4] <- 100
+REGFILE update from appliation: reg[2] <- 0
+REGFILE update from appliation: reg[1] <- 100
+Stopped Motor 1 at position 0 mm
+REGFILE update from appliation: reg[2] <- 0
+REGFILE update from appliation: reg[1] <- 100
+Stopped Motor 1 at position 0 mm
+REGFILE update from appliation: reg[5] <- 0
+REGFILE update from appliation: reg[4] <- 100
+Stopped Motor 2 at position 0 mm
+REGFILE update from appliation: reg[5] <- 0
+REGFILE update from appliation: reg[4] <- 100
+Stopped Motor 2 at position 0 mm
+REGFILE update from appliation: reg[5] <- 100
+REGFILE update from appliation: reg[4] <- 100
+Stopped Motor 2 at position 100 mm
+REGFILE update from appliation: reg[2] <- 100
+REGFILE update from appliation: reg[1] <- 100
+
+Race between update of target_position register triggered by buttons (update_regs) and I2C (case reg.register_changed():)
+
+REGFILE: reg[0] <- 1
+Starting Motor 1 at position 100 mm in closing direction
+REGFILE: stop_bit
+REGFILE update from appliation: reg[2] <- 100
+REGFILE update from appliation: reg[1] <- 50
+
+This is never true in motor_position.php:
+    if($server_target_mp != $current_mp) {
+      // Button control on server takes priority
+      // Update target_mp as feedback to client
+      error_log("Motor target position was changed on server with Buttons");
+      $target_mp = $server_target_mp;
+    }
+{
+
+PHP is reading different I2C values with the same command.
+ i2c_control -r 3
+ i2c_control -r 7
+PHP reads: 228 (0xE4)
+CLI reads: 128 (0x80)
+
+But only with some registers !
+Registers 3 and 7 fail.
+The others are fine
+Weird
+
+
+

@@ -1,0 +1,47 @@
+I2C Debug
+=========
+
+scope trace from i2cdetect -y 1 shows:
+rPi drives SCL low for 10us
+then starts clocking with a perios of 10us. First a high pulse of 5us, then low pulse of us
+10 rising edges
+transmitted value: (MSB first) 0b000001101
+Last bit is !ACK which is 1 which means no ACK. That makes because XMOS I2C slave isn't running.
+
+Now starting I2C slave on XMOS:
+After swapping the wires I get the XMOS device detected reliably by i2cdetect -y 1 at address 0x3C
+
+But smbus write from Python fails:
+Writing I2C devie at address 0x3c with value 0xff
+Traceback (most recent call last):
+  File "./rpi_i2c.py", line 17, in <module>
+    bus.write_byte(address, write_val);
+
+Despite that XMOS slave sees the stop bit:
+from xscope trace:
+REGFILE: stop_bit
+
+But the read works!
+Read from I2C devie at address 60: data 6
+
+XMOS:
+REGFILE: select reg[1]
+REGFILE: reg[1] -> 6
+REGFILE: stop_bit
+
+Analysing the write signals to se why there is no ack.
+I2C analyser sees:
+Address Ack 0, Data Ack 1
+
+But for Read it's the same"
+Address Ack 0, Data Ack 1
+
+Signal level:
+
+
+
+
+
+
+
+

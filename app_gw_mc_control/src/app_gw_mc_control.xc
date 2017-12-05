@@ -54,6 +54,14 @@
 
 #define ES_TRIGGERED 1 // End Switch triggered
 #define BUTTON_PRESSED 1 // End Switch triggered
+#define NO_BUTTON_PRESSED 0xf // No button pressed on 4-bit port
+
+// Position index of buttons on the 4-bit port
+#define CLOSE_BUTTON_0_POS 0
+#define OPEN_BUTTON_0_POS 1
+#define CLOSE_BUTTON_1_POS 2
+#define OPEN_BUTTON_1_POS 3
+
 #define MOTOR_CLOSING_DIR 1
 #define MOTOR_OPENING_DIR (!MOTOR_CLOSING_DIR)
 
@@ -76,10 +84,8 @@ on MC_TILE : in port p_es_m1_open = XS1_PORT_1J;  //
 on MC_TILE : in port p_es_m2_open = XS1_PORT_1I;  // 
 
 // Todo: Move this to a 4-bit port. There are no more 1-bit ports 
-// Button to close the ventilation (both motors)
-on MC_TILE : in port p_close_button = XS1_PORT_1H;  // Button to close ventilation (move up)
-// Button to open the ventilation (both motors)
-on MC_TILE : in port p_open_button = XS1_PORT_1G;  // Button to close ventilation (move down)
+// Button to open and close the ventilations
+on MC_TILE : in port p_control_buttons = XS1_PORT_4D;  
 
 /** Outputs **/
 // Motor 1 on/off
@@ -245,15 +251,19 @@ int motor_moved_by_button(motor_state_s* ms, client register_if reg) {
   return 0; 
 }
 
+unsigned button_pressed(unsigned button_index, unsigned portval) {
+  return ((portval >> button_index) & 1) == BUTTON_PRESSED;
+}
+
 void mc_control(client register_if reg) {
 
     timer tmr_pos;
-    timer tmr_dbc;  // debounce tiemr for p_close_button
-    timer tmr_dbo;  // debounce timer for p_open_button
-    int t_dbc, t_dbo, t_pos;
+    timer tmr_dbc;  // debounce tiemr for p_control_buttons
+
+    int t_dbc, t_pos;  // time variables
     motor_state_s state_m0, state_m1;
-    unsigned close_button_pressed=0, open_button_pressed=0;
-    unsigned prev_open_button_val, prev_close_button_val;
+    unsigned buttons_changed = 0;
+    unsigned prev_control_buttons_val;
     unsigned prev_es_m1_open_val, prev_es_m1_closed_val, prev_es_m2_open_val, prev_es_m2_closed_val;
     unsigned led_val = 0;
 
@@ -274,13 +284,14 @@ void mc_control(client register_if reg) {
     init_motor_state(&state_m1, es_m2_open_val, es_m2_closed_val, 1);
     update_regs(&state_m1, reg);
 
+    // Init!!
     tmr_pos :> t_pos;  // init position update time
+    p_control_buttons :> prev_control_buttons_val;
 
     while(1) {
         // input from all input ports and store in prev values
         // prev values are instrumental in the case guards to detect the desired edge
-        p_close_button :> prev_close_button_val;
-        p_open_button :> prev_open_button_val;
+
         p_es_m1_open :> prev_es_m1_open_val;
         p_es_m1_closed :> prev_es_m1_closed_val;
         p_es_m2_open :> prev_es_m2_open_val;
@@ -326,105 +337,93 @@ void mc_control(client register_if reg) {
               }
               break;
             
-            // rising edge on p_close_button 
-            case (prev_close_button_val != BUTTON_PRESSED) => p_close_button when pinseq(BUTTON_PRESSED) :> prev_close_button_val:
-              close_button_pressed = 1;
-              tmr_dbc :> t_dbc;
+            // Port value changed which means some button was pressed or released
+            case (!buttons_changed) => p_control_buttons when pinsneq(prev_control_buttons_val) :> prev_control_buttons_val:
+              buttons_changed = 1;
+              tmr_dbc :> t_dbc; // update timer
 #if DEBOUNCE
               break;
 
-            // debounce p_close_button
-            //case close_button_pressed => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> void:
-            case close_button_pressed => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> t_dbc:
+            // debounce p_control_buttons
+            case (buttons_changed) => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> t_dbc:
 #endif
-              unsigned close_button_val;
-              p_close_button :> close_button_val;
-              if(close_button_val == BUTTON_PRESSED) { // button is still pressed!
-                if(state_m0.state == CLOSING) {
-                  // close button pressed again whilst closing -> switch off
-                  printf("p_close_button was pressed whilst Motor 1 was already closing -> Stop Motor 1\n");
-                  state_m0.target_position = state_m0.position;
-                  state_m0.trigger = BUTTON; // This is key to update the client if caused start_motor via I2C
-                  stop_motor(p_m1_on, &state_m0, reg);
-                } else if(state_m0.state == STOPPED && state_m0.position == CLOSED_POS) {
-                  printf("Motor 1 is already in closed position\n");  
-                  // do nothing
-                } else {
-                  printf("p_close_button was pressed first time -> Switch Motor 1 on in closing direction from position %d mm\n", state_m0.position);
-                  state_m0.state = CLOSING;
-                  state_m0.target_position = CLOSED_POS;
-                  start_motor(&state_m0, reg, BUTTON);
-                }
-                if(state_m1.state == CLOSING) {
-                  // close button pressed again whilst closing -> switch off
-                  printf("p_close_button was pressed whilst Motor 2 was already closing -> Stop Motor 2\n");
-                  state_m1.target_position = state_m1.position;
-                  state_m1.trigger = BUTTON; // This is key to update the client if caused start_motor via I2C
-                  stop_motor(p_m2_on, &state_m1, reg);
+              unsigned control_buttons_val;
+              p_control_buttons :> control_buttons_val;
 
-                } else if(state_m1.state == STOPPED && state_m1.position == CLOSED_POS) {
-                  printf("Motor 2 is already in closed position\n");  
-                  // do nothing
-                } else {
-                  printf("p_close_button was pressed first time -> Switch Motor 2 on in closing direction from position %d mm\n", state_m1.position);
-                  state_m1.state = CLOSING;
-                  state_m1.target_position = CLOSED_POS;
-                  start_motor(&state_m1, reg, BUTTON);
+              if(control_buttons_val == prev_control_buttons_val) { // The button change persistet -> No glitch
+                if(button_pressed(CLOSE_BUTTON_0_POS, control_buttons_val)) {
+                  if(state_m0.state == CLOSING) {
+                    // close button pressed again whilst closing -> switch off
+                    printf("p_close_button was pressed whilst Motor 1 was already closing -> Stop Motor 1\n");
+                    state_m0.target_position = state_m0.position;
+                    state_m0.trigger = BUTTON; // This is key to update the client if caused start_motor via I2C
+                    stop_motor(p_m1_on, &state_m0, reg);
+                  } else if(state_m0.state == STOPPED && state_m0.position == CLOSED_POS) {
+                    printf("Motor 1 is already in closed position\n");  
+                    // do nothing
+                  } else {
+                    printf("p_close_button was pressed first time -> Switch Motor 1 on in closing direction from position %d mm\n", state_m0.position);
+                    state_m0.state = CLOSING;
+                    state_m0.target_position = CLOSED_POS;
+                    start_motor(&state_m0, reg, BUTTON);
+                  }
+                // use else if to give close button the priority
+                } else if(button_pressed(OPEN_BUTTON_0_POS, control_buttons_val)) {
+                  if(state_m0.state == OPENING) {
+                    // open button pressed again whilst closing -> switch off
+                    printf("p_open_button was pressed whilst Motor 1 was already opening -> Stop Motor 1\n");
+                    state_m0.target_position = state_m0.position;
+                    state_m0.trigger = BUTTON; // This is key to update the client if caused start_motor via I2C
+                    stop_motor(p_m1_on, &state_m0, reg);
+                  } else if(state_m0.state == STOPPED && state_m0.position == OPEN_POS) {
+                    printf("Motor 1 is already in open position\n");  
+                    // do nothing
+                  } else {
+                    printf("p_open_button was pressed first time -> Switch Motor 1 on in opening direction from position %d mm\n", state_m0.position);
+                    state_m0.state = OPENING;
+                    state_m0.target_position = OPEN_POS;
+                    start_motor(&state_m0, reg, BUTTON);
+                  }
+                }
+
+                if(button_pressed(CLOSE_BUTTON_1_POS, control_buttons_val)) {  
+                  if(state_m1.state == CLOSING) {
+                    // close button pressed again whilst closing -> switch off
+                    printf("p_close_button was pressed whilst Motor 2 was already closing -> Stop Motor 2\n");
+                    state_m1.target_position = state_m1.position;
+                    state_m1.trigger = BUTTON; // This is key to update the client if caused start_motor via I2C
+                    stop_motor(p_m2_on, &state_m1, reg);
+  
+                  } else if(state_m1.state == STOPPED && state_m1.position == CLOSED_POS) {
+                    printf("Motor 2 is already in closed position\n");  
+                    // do nothing
+                  } else {
+                    printf("p_close_button was pressed first time -> Switch Motor 2 on in closing direction from position %d mm\n", state_m1.position);
+                    state_m1.state = CLOSING;
+                    state_m1.target_position = CLOSED_POS;
+                    start_motor(&state_m1, reg, BUTTON);
+                  }
+                // use else if to give close button the priority
+                } else if(button_pressed(OPEN_BUTTON_1_POS, control_buttons_val)) {
+                  if(state_m1.state == OPENING) {
+                    // open button pressed again whilst closing -> switch off
+                    printf("p_open_button was pressed whilst Motor 2 was already opening -> Stop Motor 2\n");
+                    state_m1.target_position = state_m1.position;
+                    state_m1.trigger = BUTTON; // This is key to update the client if caused start_motor via I2C
+                    stop_motor(p_m2_on, &state_m1, reg);
+                  } else if(state_m1.state == STOPPED && state_m1.position == OPEN_POS) {
+                    printf("Motor 2 is already in open position\n");  
+                    // do nothing
+                  } else {
+                    printf("p_open_button was pressed first time -> Switch Motor 2 on in opening direction from position %d mm\n", state_m1.position);
+                    state_m1.state = OPENING;
+                    state_m1.target_position = OPEN_POS;
+                    start_motor(&state_m1, reg, BUTTON);
+                  }
                 }
               }
-              close_button_pressed = 0; // reset to re-activate case !close_button_pressed =>  
+              buttons_changed = 0; // reset to re-activate case (buttons_changed) =>
               break;
-
-            // rising edge on p_open_button
-            //case prev_open_button_val != BUTTON_PRESSED => p_open_button when pinseq(BUTTON_PRESSED) :> prev_open_button_val:
-            case (prev_open_button_val != BUTTON_PRESSED) => p_open_button when pinseq(BUTTON_PRESSED) :> prev_open_button_val:
-              // rising edge detected
-              open_button_pressed = 1;
-              tmr_dbo :> t_dbo;
-#if DEBOUNCE
-              break;
-
-            // debounce p_open_button
-            case open_button_pressed => tmr_dbo when timerafter(t_dbo+DEBOUNCE_TIME) :> void:
-#endif
-              unsigned open_button_val;
-              p_open_button :> open_button_val;
-              if(open_button_val == BUTTON_PRESSED) { // button is still pressed!
-                if(state_m0.state == OPENING) {
-                  // open button pressed again whilst closing -> switch off
-                  printf("p_open_button was pressed whilst Motor 1 was already opening -> Stop Motor 1\n");
-                  state_m0.target_position = state_m0.position;
-                  state_m0.trigger = BUTTON; // This is key to update the client if caused start_motor via I2C
-                  stop_motor(p_m1_on, &state_m0, reg);
-                } else if(state_m0.state == STOPPED && state_m0.position == OPEN_POS) {
-                  printf("Motor 1 is already in open position\n");  
-                  // do nothing
-                } else {
-                  printf("p_open_button was pressed first time -> Switch Motor 1 on in opening direction from position %d mm\n", state_m0.position);
-                  state_m0.state = OPENING;
-                  state_m0.target_position = OPEN_POS;
-                  start_motor(&state_m0, reg, BUTTON);
-                }
-
-                if(state_m1.state == OPENING) {
-                  // open button pressed again whilst closing -> switch off
-                  printf("p_open_button was pressed whilst Motor 2 was already opening -> Stop Motor 2\n");
-                  state_m1.target_position = state_m1.position;
-                  state_m1.trigger = BUTTON; // This is key to update the client if caused start_motor via I2C
-                  stop_motor(p_m2_on, &state_m1, reg);
-                } else if(state_m1.state == STOPPED && state_m1.position == OPEN_POS) {
-                  printf("Motor 2 is already in open position\n");  
-                  // do nothing
-                } else {
-                  printf("p_open_button was pressed first time -> Switch Motor 2 on in opening direction from position %d mm\n", state_m1.position);
-                  state_m1.state = OPENING;
-                  state_m1.target_position = OPEN_POS;
-                  start_motor(&state_m1, reg, BUTTON);
-                }
-              }
-              open_button_pressed = 0; // reset to re-activate case !open_button_pressed =>  
-              break;
-
 
             case tmr_pos when timerafter(t_pos+POS_UPDATE_PERIOD) :> t_pos:
               unsigned pos_change =  MOTOR_SPEED * POS_UPDATE_PERIOD / XS1_TIMER_HZ; 

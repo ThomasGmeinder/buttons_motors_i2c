@@ -85,5 +85,13 @@ Registers 3 and 7 fail.
 The others are fine
 Weird
 
+Reason: php kept adding to the $output array of exe
+    exec($command, $output, $return);  
+must be explitly cleared after every exe
+    $output = []; 
+
+Cache must be cleared sometimes to see server updates to rangeslider.js 
+
+
 
 

@@ -6,21 +6,27 @@
 #include "debug_print.h"
 #include "i2c_app.h"
 
-typedef enum {
-    RW, // Read and Write via I2C
-    R   // Read only from I2C
-} reg_access_t;
+
 
 reg_access_t register_access[NUM_REGISTERS] = {
    RW,
    RW,
    R,
    R, 
+   R,
    RW,
    RW,
    R,
-   R
+   R,
+   R,
 };
+
+
+#define STATUS_REG_CHANGED_BIT_IDX 6
+
+unsigned get_motor_reg_idx(unsigned regnum) {
+  return regnum % NUM_REGS_PER_MOTOR;
+}
 
 [[distributable]]
 void i2c_slave_register_file(server i2c_slave_callback_if i2c,
@@ -28,14 +34,17 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
 {
   uint8_t registers[NUM_REGISTERS];
   // Register,  I2C Access, Function
-  // 0          RW          Motor 1 trigger, states
+  // 0          RW          Motor 1 state
   // 1          RW          Motor 1 target position
   // 2          R           Motor 1 current position
-  // 3          R           Motor 1 status
-  // 4          RW          Motor 2 trigger, states
-  // 5          RW          Motor 2 target position
-  // 6          R           Motor 2 current position
-  // 7          R           Motor 2 status
+  // 3          R           Motor 1 actuator
+  // 4          R           Motor 1 event reg
+
+  // 5          RW          Motor 2 state
+  // 6          RW          Motor 2 target position
+  // 7          R           Motor 2 current position
+  // 8          R           Motor 2 actuator
+  // 9          R           Motor 1 event reg
 
   // Note: Status register is used to enable handshake between remote client and this program.
   // It is cleared only after the remote client read it to ensure that the event that the motor position was changed locally is not missed
@@ -53,6 +62,14 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
     case app.set_register(int regnum, uint8_t data):
       if (regnum >= 0 && regnum < NUM_REGISTERS) {
         debug_printf("REGFILE update from appliation: reg[%d] <- %d\n", regnum, data);
+        if(get_motor_reg_idx(regnum) == 3) // it is an actuator register
+        {
+          // store prev actuator in upper 4 bits
+          //data |= (registers[regnum] << 4) & 0xF0; 
+          //debug_printf("REGFILE updating data to store previous actuator 0x%x\n", data);
+          //debug_printf("REGFILE setting changed bit in status register %d\n", regnum);
+          //data |= 1<<STATUS_REG_CHANGED_BIT_IDX; // set changed bit in status register
+        }
         registers[regnum] = data;
       }
       break;
@@ -124,10 +141,16 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
         data = registers[current_regnum];
         debug_printf("REGFILE: reg[%d] -> %d\n", current_regnum, data);
 
-        if(current_regnum == 3 || current_regnum == 7) {
-          // clear status register
-          registers[current_regnum] = 0;
+        if(get_motor_reg_idx(current_regnum) == 3) {
+          // clear actuator register
+          // Todo: Is this necessary?
+          //registers[current_regnum] = 0;
         }
+        if(get_motor_reg_idx(current_regnum) == 4)  // Button event register
+          { 
+            registers[current_regnum] = NO_EVENT; 
+            debug_printf("REGFILE clearing button event register %d after read\n", current_regnum);
+          }
       } else {
         data = 0;
       }

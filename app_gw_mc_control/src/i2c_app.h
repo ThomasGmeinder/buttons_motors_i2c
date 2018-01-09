@@ -3,6 +3,17 @@
 
 #include "i2c.h"
 
+typedef enum {
+    RW, // Read and Write via I2C
+    R   // Read only from I2C
+} reg_access_t;
+
+typedef enum {
+    NO_EVENT = 0,
+    START,
+    STOP,
+} motor_event_t;
+
 /*
  * Interface definition between user application and I2C slave register file
  */
@@ -28,7 +39,15 @@ typedef interface register_if {
   slave void register_changed();
 } register_if;
 
-#define NUM_REGISTERS 10
+#define NUM_REGS_PER_MOTOR 5
+#define NUM_MOTORS 2
+#define NUM_REGISTERS NUM_REGS_PER_MOTOR * NUM_MOTORS
+
+#define MOTOR_STATE_REG_OFFSET 0
+#define MOTOR_TARGET_POS_REG_OFFSET 1
+#define MOTOR_CURRENT_POS_REG_OFFSET 2
+#define MOTOR_ACTUATOR_REG_OFFSET 3
+#define MOTOR_EVENT_REG_OFFSET 4
 
 [[distributable]]
 void i2c_slave_register_file(server i2c_slave_callback_if i2c, server register_if app);

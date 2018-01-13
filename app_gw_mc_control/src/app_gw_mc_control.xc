@@ -130,6 +130,13 @@ typedef struct {
     motor_state_t state;
 } motor_state_s;
 
+void delay_us(unsigned time_us) {
+  int t;
+  timer tmr;
+  tmr :> t;
+  tmr when timerafter(t+time_us*100) :> t;
+}
+
 void init_motor_state(motor_state_s* ms, unsigned es_open_val, unsigned es_closed_val, unsigned motor_idx) {
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
@@ -250,9 +257,11 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
 
   if(ms->motor_idx == 0) {
     p_m1_dir <: dir_val;
+    delay_us(10000); // delay 10ms to make sure the big capacitor is connected when motor is switched on
     p_m1_on <: MOTOR_ON;
   } else {
     p_m2_dir <: dir_val;
+    delay_us(10000); // delay 10ms to make sure the big capacitor is connected when motor is switched on
     p_m2_on <: MOTOR_ON;  
   }
 

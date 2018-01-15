@@ -68,11 +68,18 @@
 #define ENDSWITCH_1_OPEN_IDX 2
 #define ENDSWITCH_1_CLOSED_IDX 3
 
+#define MOTOR_OPEN_BUTTON_GREEN_LED_IDX 0
+#define MOTOR_OPEN_BUTTON_RED_LED_IDX 1
+#define MOTOR_CLOSE_BUTTON_BLUE_LED_IDX 2
+#define MOTOR_CLOSE_BUTTON_RED_LED_IDX 3
+
 #define MOTOR_CLOSING_DIR 1
 #define MOTOR_OPENING_DIR (!MOTOR_CLOSING_DIR)
 
 #define MOTOR_OFF 1  // Relais inputs are pulled high so default (high) should mean off
 #define MOTOR_ON 0
+
+#define PUSHBUTTON_LED_ON 1
 
 #define MC_TILE tile[0]
 
@@ -115,6 +122,9 @@ on MC_TILE : port p_slave_scl = XS1_PORT_1M; // X0D36 // connect to GPIO 3 on rP
 on MC_TILE : port p_slave_sda = XS1_PORT_1N; // X0D37 // connect to GPIO 2 on rPI
 
 on MC_TILE : port p_led = XS1_PORT_4F;
+
+on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4A;
+on MC_TILE : port p_m2_pushbutton_leds = XS1_PORT_4E;
 
 typedef enum {
     OPENING,
@@ -234,10 +244,34 @@ void init_regs(motor_state_s* ms, client register_if reg) {
   reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
 }
 
+void upate_pushbutton_leds(motor_state_s* ms) {
+   int led_on_mask; // set bit one where LED is on
+   if(ms->state == OPENING) {
+     led_on_mask = (1 << MOTOR_OPEN_BUTTON_GREEN_LED_IDX);
+   } else if(ms->state == CLOSING) {
+     led_on_mask = (1 << MOTOR_CLOSE_BUTTON_BLUE_LED_IDX);
+   } else if(ms->state == STOPPED) {
+     led_on_mask = 0; // off
+   } else { // notify the user that there is some error state
+     led_on_mask = (1 << MOTOR_OPEN_BUTTON_RED_LED_IDX) | (1 << MOTOR_CLOSE_BUTTON_RED_LED_IDX);
+   }
+ 
+   if(PUSHBUTTON_LED_ON == 0) {
+     // invert the mask for low-active LEDs
+     led_on_mask = ~led_on_mask;
+   }
+
+   if(ms->motor_idx == 0) {
+     p_m1_pushbutton_leds <: led_on_mask;
+   } else {
+     p_m2_pushbutton_leds <: led_on_mask;
+   }
+}
 int stop_motor(out port motor_on, motor_state_s* ms, client register_if reg) {
     motor_on <: MOTOR_OFF;
     ms->state = STOPPED;
 
+    upate_pushbutton_leds(ms);
     update_position_regs(ms, reg);
     // register stop event
     int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
@@ -286,6 +320,7 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
     p_m2_on <: MOTOR_ON;  
   }
 
+  upate_pushbutton_leds(ms);
   update_position_regs(ms, reg);
   // register start event
   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
@@ -513,6 +548,7 @@ void mc_control(client register_if reg) {
                   check_motor_state(&state_m0, OPENING, OPEN_POS);
                   printf("Motor 1 open endswitch triggered\n");
                   state_m0.position = OPEN_POS;
+                  state_m0.target_position = state_m0.position;
                   state_m0.actuator = BUTTON; 
                   stop_motor(p_m1_on, &state_m0, reg);
                 }
@@ -520,6 +556,7 @@ void mc_control(client register_if reg) {
                   check_motor_state(&state_m0, CLOSING, CLOSED_POS);
                   printf("Motor 1 closed endswitch triggered\n");
                   state_m0.position = OPEN_POS;
+                  state_m0.target_position = state_m0.position;
                   state_m0.actuator = BUTTON; 
                   stop_motor(p_m1_on, &state_m0, reg);
                 }
@@ -527,6 +564,7 @@ void mc_control(client register_if reg) {
                   check_motor_state(&state_m1, OPENING, OPEN_POS);
                   printf("Motor 2 open endswitch triggered\n");
                   state_m1.position = OPEN_POS;
+                  state_m1.target_position = state_m1.position;
                   state_m1.actuator = BUTTON; 
                   stop_motor(p_m2_on, &state_m1, reg);
                 }
@@ -534,6 +572,7 @@ void mc_control(client register_if reg) {
                   check_motor_state(&state_m1, CLOSING, CLOSED_POS);
                   printf("Motor 2 closed endswitch triggered\n");
                   state_m1.position = OPEN_POS;
+                  state_m1.target_position = state_m1.position;
                   state_m1.actuator = BUTTON; 
                   stop_motor(p_m2_on, &state_m1, reg);
                 }
@@ -565,9 +604,13 @@ void mc_control(client register_if reg) {
               }; 
               //Todo: if(pos_out_of_range(state_m1.position)) {
 
-              // Use this timer event to toggle LED for activity detection
+              // Use this timer event to update LEDs
+              // toggle LED for activity detection
               led_val = 1-led_val;
               p_led <: (led_val << 3); // Green LED is on P4F3
+              // Update pushbutton LEDs. Todo: move to a place where 
+              upate_pushbutton_leds(&state_m0);
+              upate_pushbutton_leds(&state_m1);
               break;
 
 
@@ -580,6 +623,7 @@ void mc_control(client register_if reg) {
               printf("Motor 1 open endswitch triggered\n");
               check_motor_state(state_m0, OPENING, OPEN_POS);
               state_m0.position = OPEN_POS;
+              state_m0.target_position = state_m0.position;
               state_m0.actuator = BUTTON; 
               stop_motor(p_m1_on, &state_m0, reg);
               break;
@@ -589,6 +633,7 @@ void mc_control(client register_if reg) {
               printf("Motor 1 closed endswitch triggered\n");  
               check_motor_state(state_m0, OPENING, OPEN_POS);
               state_m0.position = CLOSED_POS;
+              state_m0.target_position = state_m0.position;              
               state_m0.actuator = BUTTON; 
               stop_motor(p_m1_on, &state_m0, reg);
               break;
@@ -597,6 +642,7 @@ void mc_control(client register_if reg) {
             case (prev_es_m2_open_val != ES_TRIGGERED) => p_es_m2_open when pinseq(ES_TRIGGERED) :> void:
               printf("Motor 2 open endswitch triggered\n");  
               state_m1.position = OPEN_POS;
+              state_m1.target_position = state_m1.position;
               state_m1.actuator = BUTTON; 
               stop_motor(p_m2_on, &state_m1, reg);
               break;

@@ -43,8 +43,8 @@
 
 #define TEST_MODE 1
 
-#define MOTOR_SPEED 10 // in mm/s
-#define MAX_POS 100 // max position in mm
+#define MOTOR_SPEED 100 // in mm/s
+#define MAX_POS 100 // max position in cm
 #define OPEN_POS_ES 0 // Open position at Endswitch
 #define OPEN_TOLERANCE 10 
 #define CLOSED_TOLERANCE 10 
@@ -62,11 +62,10 @@
 #define CLOSE_BUTTON_1_IDX 2
 #define OPEN_BUTTON_1_IDX 3
 
-// Position index of buttons on the 4-bit port
-#define ENDSWITCH_0_OPEN_IDX 0
-#define ENDSWITCH_0_CLOSED_IDX 1
-#define ENDSWITCH_1_OPEN_IDX 2
-#define ENDSWITCH_1_CLOSED_IDX 3
+// Endswith bit positions
+#define ENDSWITCH_OPEN 0b01
+#define ENDSWITCH_CLOSED 0b10
+#define NO_ENDSWITCH 0
 
 #define MOTOR_OPEN_BUTTON_GREEN_LED_IDX 0
 #define MOTOR_OPEN_BUTTON_RED_LED_IDX 1
@@ -130,9 +129,15 @@ typedef enum {
     OPENING,
     CLOSING,
     STOPPED,
-    POS_UNKNOWN,
+    STATE_UNKNOWN,
     ERROR
 } motor_state_t;
+
+typedef enum {
+    NO_ERROR,
+    POSITION_UNKNOWN,
+    ENDSWITCH_ERROR,
+} motor_error_t;
 
 typedef enum {
     I2C = 0,
@@ -147,6 +152,7 @@ typedef struct {
     actuator_t actuator;
 
     motor_state_t state;
+    motor_error_t error;
 } motor_state_s;
 
 void delay_us(unsigned time_us) {
@@ -156,10 +162,79 @@ void delay_us(unsigned time_us) {
   tmr when timerafter(t+time_us*100) :> t;
 }
 
-void init_motor_state(motor_state_s* ms, unsigned es_open_val, unsigned es_closed_val, unsigned motor_idx) {
+// protos
+int stop_motor(motor_state_s* ms, client register_if reg);
+void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position);
+
+unsigned bit_set(unsigned bit_index, unsigned portval) {
+  return ((portval >> bit_index) & 1) == BUTTON_PRESSED;
+}
+
+// Todo: replace with endswitches_triggered
+unsigned endswitch_triggered(unsigned endswitch_index, unsigned portval) {
+  return ((portval >> endswitch_index) & 1) == ES_TRIGGERED;
+}
+
+int motor_endswitches_triggered(unsigned endswitches_val, unsigned mask) {
+  if(mask > 0b11) {
+    printf("Error: Invalid 2-bit mask\n");
+    return 0;
+  }
+  // check that every bit in the 2-bit mask is asserted
+  for(unsigned shift=0; shift<2; ++shift) {
+    if((mask >> shift) & 1) {
+      if(((endswitches_val >> shift) & 1) != ES_TRIGGERED) {
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state_s* ms, client register_if reg) {
+   printf("Checking endswitches portval 0x%x for Motor %d\n", motor_endswitches, ms->motor_idx);  
+
+   if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN | ENDSWITCH_CLOSED)) {
+     ms->state = STATE_UNKNOWN;
+     ms->error = ENDSWITCH_ERROR;
+     printf("Fatal Error: Both Endswitches on Motor %d triggered at the same time\n", ms->motor_idx);
+     // todo: store and report Error
+   } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN)) {
+     check_motor_state_after_endswitch_triggered(ms, OPENING, OPEN_POS_ES);
+     printf("Motor %d open endswitch triggered\n", ms->motor_idx);
+     ms->state = STOPPED;
+     ms->actuator = BUTTON; 
+     ms->position = OPEN_POS_ES;
+     ms->target_position = ms->position;
+     stop_motor(ms, reg);
+   } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
+     check_motor_state_after_endswitch_triggered(ms, CLOSING, CLOSED_POS_ES);
+     printf("Motor %d closed endswitch triggered\n", ms->motor_idx);
+     ms->state = STOPPED;
+     ms->actuator = BUTTON; 
+     ms->position = CLOSED_POS_ES;
+     ms->target_position = ms->position;
+     stop_motor(ms, reg);
+   };
+}
+
+
+void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, unsigned endswitches_val, unsigned motor_idx) {
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
 
+    if(motor_pos == -1) {
+      ms->state = STATE_UNKNOWN;
+      ms->error = POSITION_UNKNOWN;      
+    } else {
+      ms->state = STOPPED;
+      ms->position = motor_pos;
+      ms->target_position = ms->position;
+    }
+    // Check endswitches and compare with position read from flash
+    check_endswitches_and_update_states(endswitches_val, ms, reg);
+
+#if 0
     // Determine state and position based on the End switches
     if(es_open_val == ES_TRIGGERED && es_closed_val == ES_TRIGGERED) {
        #if TEST_MODE
@@ -180,7 +255,7 @@ void init_motor_state(motor_state_s* ms, unsigned es_open_val, unsigned es_close
        ms->target_position = CLOSED_POS_ES; // safer to have it closed
        #else 
        printf("ERROR: Both endswitches are off -> unknown position somewhere between OPEN_POS_ES and CLOSED_POS_ES\n");
-       ms->state = POS_UNKNOWN;
+       ms->state = ERROR;
        // Todo: Handle this case:
        ms->position = -1; // invalid
        ms->target_position = CLOSED_POS_ES; // safer to have it closed
@@ -191,9 +266,10 @@ void init_motor_state(motor_state_s* ms, unsigned es_open_val, unsigned es_close
        ms->state = STOPPED;
     } else if(es_closed_val == ES_TRIGGERED) {
        ms->position = CLOSED_POS_ES;
-      ms->target_position = CLOSED_POS_ES;
+       ms->target_position = CLOSED_POS_ES;
        ms->state = STOPPED;
     } 
+#endif
 }
 
 int target_pos_reached(motor_state_s* ms) {
@@ -249,16 +325,34 @@ void init_regs(motor_state_s* ms, client register_if reg) {
 }
 
 void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position) {
-   // Todo: Check OPEN_TOLERANCE, CLOSED_TOLERANCE, motor state
-   //int diff = ms.position - actual_position;
-   //if(diff < 0) diff = -diff;
-   //if(diff > tolerance) // update error register so it can be read by Server
+  // Todo: Check OPEN_TOLERANCE, CLOSED_TOLERANCE, motor state
+  if(ms->state == OPENING) {
+    if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
+       // speed estimation too slow. 
+       // Todo: compute speed estimation error
+       //ms->error = SPEED_ESTIMATION_SLOW
+    } else if(OPEN_POS_ES - ms->position > OPEN_TOLERANCE) {
+       // Ventilation went past Endswitch -> speed estimation too fast
+       // This case should not happen. Motor should have been stopped already by case tmr_pos
+       // Todo: compute speed estimation error
+    }
+  }
+  if(ms->state == CLOSING) {
+    if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
+       // Ventilation went past Endswitch -> speed estimation too fast
+       // This case should not happen. Motor should have been stopped already by case tmr_pos
+       // Todo: compute speed estimation error
+    } else if(OPEN_POS_ES - ms->position > OPEN_TOLERANCE) {
+       // speed estimation too slow. 
+       // Todo: compute speed estimation error
+       //ms->error = SPEED_ESTIMATION_SLOW
+    }   
+  } 
+  //int diff = ms.position - actual_position;
+  //if(diff < 0) diff = -diff;
+  //if(diff > tolerance) // update error register so it can be read by Server
 }
 
-void check_endswitches(unsigned endswitches_val) {
-   printf("Checking endswitches portval 0x%x\n", endswitches_val);  
-   // Todo: Check that open and close endswitches are not triggered simultaneously, etc.
-}
 
 void upate_pushbutton_leds(motor_state_s* ms) {
    int led_on_mask; // set bit one where LED is on
@@ -284,8 +378,12 @@ void upate_pushbutton_leds(motor_state_s* ms) {
    }
 }
 
-int stop_motor(out port motor_on, motor_state_s* ms, client register_if reg) {
-    motor_on <: MOTOR_OFF;
+int stop_motor(motor_state_s* ms, client register_if reg) {
+    if(ms->motor_idx == 0) {
+      p_m1_on <: MOTOR_OFF;
+    } else {
+      p_m2_on <: MOTOR_OFF;
+    }
     ms->state = STOPPED;
 
     upate_pushbutton_leds(ms);
@@ -347,14 +445,6 @@ int motor_moved_by_button(motor_state_s* ms, client register_if reg) {
   return 0; 
 }
 
-unsigned button_pressed(unsigned button_index, unsigned portval) {
-  return ((portval >> button_index) & 1) == BUTTON_PRESSED;
-}
-
-unsigned endswitch_triggered(unsigned endswitch_index, unsigned portval) {
-  return ((portval >> endswitch_index) & 1) == ES_TRIGGERED;
-}
-
 
 void mc_control(client register_if reg) {
 
@@ -374,6 +464,17 @@ void mc_control(client register_if reg) {
     printf("Starting Greenhouse Motor Control Application\n\n");
     printf("Motor speed is set to %u mm/s\n", MOTOR_SPEED);
 
+
+    #if ES_TRIGGERED==1
+      // enable internal pulldowns for high active signals
+      set_port_pull_down(p_endswitches);
+    #else 
+      // enable internal pulldowns for low active 
+      set_port_pull_up(p_endswitches);
+    #endif
+
+#if ENDSWITCHES_ON_ONEBIT_PORTS
+    // Todo: remove 1-bit ports for endswitches
     // read the endswitches and init motor states
     // Note: Had to move endswitch detection to another task to workaround compiler bug
     unsigned es_m1_open_val, es_m1_closed_val, es_m2_open_val, es_m2_closed_val;
@@ -382,27 +483,38 @@ void mc_control(client register_if reg) {
     p_es_m1_closed :> es_m1_closed_val;
     p_es_m2_open :> es_m2_open_val;
     p_es_m2_closed :> es_m2_closed_val;
+#endif
 
-    init_motor_state(&state_m0, es_m1_open_val, es_m1_closed_val, 0);
+
+    int m0_pos = -1; // ivalid
+    int m1_pos = -1; // invalid
+
+
+    // Is this needed??
+    p_control_buttons :> prev_control_buttons_val;
+    p_endswitches :> prev_endswitches_val;
+
+    unsigned endswitches_m0 = prev_endswitches_val & 0b11;
+    unsigned endswitches_m1 = (prev_endswitches_val >> 2) & 0b11;
+
+    init_motor_state(&state_m0, reg, m0_pos, endswitches_m0, 0);
     init_regs(&state_m0, reg);
-    init_motor_state(&state_m1, es_m2_open_val, es_m2_closed_val, 1);
+    init_motor_state(&state_m1, reg, m1_pos, endswitches_m1, 1);
     init_regs(&state_m1, reg);
 
     // Init!!
     tmr_pos :> t_pos;  // init position update time
 
-    // Is this needed??
-    p_control_buttons :> prev_control_buttons_val;
-    //p_endswitches :> prev_endswitches_val;
 
     while(1) {
         // input from all input ports and store in prev values
         // prev values are instrumental in the case guards to detect the desired edge
-
+#if ENDSWITCHES_ON_ONEBIT_PORTS
         p_es_m1_open :> prev_es_m1_open_val;
         p_es_m1_closed :> prev_es_m1_closed_val;
         p_es_m2_open :> prev_es_m2_open_val;
         p_es_m2_closed :> prev_es_m2_closed_val;
+#endif 
 
         // event handlers
         select {
@@ -460,13 +572,13 @@ void mc_control(client register_if reg) {
               p_control_buttons :> control_buttons_val;
 
               if(control_buttons_val == prev_control_buttons_val) { // The button change persistet -> No glitch
-                if(button_pressed(CLOSE_BUTTON_0_IDX, control_buttons_val)) {
+                if(bit_set(CLOSE_BUTTON_0_IDX, control_buttons_val)) {
                   if(state_m0.state == CLOSING) {
                     // close button pressed again whilst closing -> switch off
                     printf("p_close_button was pressed whilst Motor 1 was already closing -> Stop Motor 1\n");
                     state_m0.target_position = state_m0.position;
                     state_m0.actuator = BUTTON; // This is key to update the client if caused start_motor via I2C
-                    stop_motor(p_m1_on, &state_m0, reg);
+                    stop_motor(&state_m0, reg);
                   } else if(state_m0.state == STOPPED && state_m0.position == CLOSED_POS_ES) {
                     printf("Motor 1 is already in closed position\n");  
                     // do nothing
@@ -477,13 +589,13 @@ void mc_control(client register_if reg) {
                     start_motor(&state_m0, reg, BUTTON);
                   }
                 // use else if to give close button the priority
-                } else if(button_pressed(OPEN_BUTTON_0_IDX, control_buttons_val)) {
+                } else if(bit_set(OPEN_BUTTON_0_IDX, control_buttons_val)) {
                   if(state_m0.state == OPENING) {
                     // open button pressed again whilst closing -> switch off
                     printf("p_open_button was pressed whilst Motor 1 was already opening -> Stop Motor 1\n");
                     state_m0.target_position = state_m0.position;
                     state_m0.actuator = BUTTON; // This is key to update the client if caused start_motor via I2C
-                    stop_motor(p_m1_on, &state_m0, reg);
+                    stop_motor(&state_m0, reg);
                   } else if(state_m0.state == STOPPED && state_m0.position == OPEN_POS_ES) {
                     printf("Motor 1 is already in open position\n");  
                     // do nothing
@@ -495,13 +607,13 @@ void mc_control(client register_if reg) {
                   }
                 }
 
-                if(button_pressed(CLOSE_BUTTON_1_IDX, control_buttons_val)) {  
+                if(bit_set(CLOSE_BUTTON_1_IDX, control_buttons_val)) {  
                   if(state_m1.state == CLOSING) {
                     // close button pressed again whilst closing -> switch off
                     printf("p_close_button was pressed whilst Motor 2 was already closing -> Stop Motor 2\n");
                     state_m1.target_position = state_m1.position;
                     state_m1.actuator = BUTTON; // This is key to update the client if caused start_motor via I2C
-                    stop_motor(p_m2_on, &state_m1, reg);
+                    stop_motor(&state_m1, reg);
   
                   } else if(state_m1.state == STOPPED && state_m1.position == CLOSED_POS_ES) {
                     printf("Motor 2 is already in closed position\n");  
@@ -513,13 +625,13 @@ void mc_control(client register_if reg) {
                     start_motor(&state_m1, reg, BUTTON);
                   }
                 // use else if to give close button the priority
-                } else if(button_pressed(OPEN_BUTTON_1_IDX, control_buttons_val)) {
+                } else if(bit_set(OPEN_BUTTON_1_IDX, control_buttons_val)) {
                   if(state_m1.state == OPENING) {
                     // open button pressed again whilst closing -> switch off
                     printf("p_open_button was pressed whilst Motor 2 was already opening -> Stop Motor 2\n");
                     state_m1.target_position = state_m1.position;
                     state_m1.actuator = BUTTON; // This is key to update the client if caused start_motor via I2C
-                    stop_motor(p_m2_on, &state_m1, reg);
+                    stop_motor(&state_m1, reg);
                   } else if(state_m1.state == STOPPED && state_m1.position == OPEN_POS_ES) {
                     printf("Motor 2 is already in open position\n");  
                     // do nothing
@@ -548,63 +660,47 @@ void mc_control(client register_if reg) {
               unsigned endswitches_val;
               p_endswitches :> endswitches_val;
               if(endswitches_val == prev_endswitches_val) { // The button change persistet -> No glitchheck
-                check_endswitches(endswitches_val); // Check that Open and Closed are not triggered at the same time
-                if(endswitch_triggered(ENDSWITCH_0_OPEN_IDX, endswitches_val)) {
-                  check_motor_state_after_endswitch_triggered(&state_m0, OPENING, OPEN_POS_ES);
-                  printf("Motor 1 open endswitch triggered\n");
-                  state_m0.position = OPEN_POS_ES;
-                  state_m0.target_position = state_m0.position;
-                  state_m0.actuator = BUTTON; 
-                  stop_motor(p_m1_on, &state_m0, reg);
-                }
-                if(endswitch_triggered(ENDSWITCH_0_CLOSED_IDX, endswitches_val)) {
-                  check_motor_state_after_endswitch_triggered(&state_m0, CLOSING, CLOSED_POS_ES);
-                  printf("Motor 1 closed endswitch triggered\n");
-                  state_m0.position = OPEN_POS_ES;
-                  state_m0.target_position = state_m0.position;
-                  state_m0.actuator = BUTTON; 
-                  stop_motor(p_m1_on, &state_m0, reg);
-                }
-                if(endswitch_triggered(ENDSWITCH_1_OPEN_IDX, endswitches_val)) {
-                  check_motor_state_after_endswitch_triggered(&state_m1, OPENING, OPEN_POS_ES);
-                  printf("Motor 2 open endswitch triggered\n");
-                  state_m1.position = OPEN_POS_ES;
-                  state_m1.target_position = state_m1.position;
-                  state_m1.actuator = BUTTON; 
-                  stop_motor(p_m2_on, &state_m1, reg);
-                }
-                if(endswitch_triggered(ENDSWITCH_1_CLOSED_IDX, endswitches_val)) {
-                  check_motor_state_after_endswitch_triggered(&state_m1, CLOSING, CLOSED_POS_ES);
-                  printf("Motor 2 closed endswitch triggered\n");
-                  state_m1.position = OPEN_POS_ES;
-                  state_m1.target_position = state_m1.position;
-                  state_m1.actuator = BUTTON; 
-                  stop_motor(p_m2_on, &state_m1, reg);
-                }
+                endswitches_m0 = endswitches_val & 0b11;
+                endswitches_m1 = (endswitches_val >> 2) & 0b11;
+                printf("Endswitches changed to value 0x%x\n", endswitches_val);
+                check_endswitches_and_update_states(endswitches_m0, &state_m0, reg); // Check that Open and Closed are not triggered at the same time
+                check_endswitches_and_update_states(endswitches_m1, &state_m1, reg); // Check that Open and Closed are not triggered at the same time
               }
               break;
 
-
             // Position estimation
             case tmr_pos when timerafter(t_pos+POS_UPDATE_PERIOD) :> t_pos:
-              unsigned pos_change =  MOTOR_SPEED * POS_UPDATE_PERIOD / XS1_TIMER_HZ; 
+              // divide by 10 because motor speed is in mm/s
+              unsigned pos_change =  (unsigned long long) MOTOR_SPEED * POS_UPDATE_PERIOD / (XS1_TIMER_HZ * 10); 
 
               if(state_m0.state == OPENING || state_m0.state == CLOSING) {
-                  if(state_m0.state == OPENING) state_m0.position -= pos_change;
-                  else state_m0.position += pos_change;
+                  if(state_m0.state == OPENING) {
+                    state_m0.position -= pos_change;
+                    printf("Motor 1 is opening. ");
+                  } else {
+                    state_m0.position += pos_change;
+                    printf("Motor 1 is closing. ");
+                  }
+                  printf("Updated position estimate to %d mm\n", state_m0.position);
                   update_position_regs(&state_m0, reg);
-                  //printf("Motor 2 is opening. Updated position estimate to %d mm\n", state_m0.position);
+
                   if(target_pos_reached(&state_m0)) {
-                    stop_motor(p_m1_on, &state_m0, reg);
+                    stop_motor(&state_m0, reg);
                   }
               }; 
               if(state_m1.state == OPENING || state_m1.state == CLOSING) {
-                  if(state_m1.state == OPENING) state_m1.position -= pos_change;
-                  else state_m1.position += pos_change;
+                  if(state_m1.state == OPENING) {
+                    state_m1.position -= pos_change;
+                    printf("Motor 1 is opening. ");
+                  } else {
+                    state_m1.position += pos_change;
+                    printf("Motor 2 is closing. ");
+                  }
+                 printf("Updated position estimate to %d mm\n", state_m1.position);
                   update_position_regs(&state_m1, reg);
-                  //printf("Motor 2 is opening. Updated position estimate to %d mm\n", state_m1.position);
+
                   if(target_pos_reached(&state_m1)) {
-                    stop_motor(p_m2_on, &state_m1, reg);
+                    stop_motor(&state_m1, reg);
                   }
               }; 
               //Todo: if(pos_out_of_range(state_m1.position)) {
@@ -630,7 +726,7 @@ void mc_control(client register_if reg) {
               state_m0.position = OPEN_POS_ES;
               state_m0.target_position = state_m0.position;
               state_m0.actuator = BUTTON; 
-              stop_motor(p_m1_on, &state_m0, reg);
+              stop_motor(&state_m0, reg);
               break;
 
             // p_es_m1_closed triggered
@@ -640,7 +736,7 @@ void mc_control(client register_if reg) {
               state_m0.position = CLOSED_POS_ES;
               state_m0.target_position = state_m0.position;              
               state_m0.actuator = BUTTON; 
-              stop_motor(p_m1_on, &state_m0, reg);
+              stop_motor(&state_m0, reg);
               break;
 
             // p_es_m2_open triggered
@@ -649,7 +745,7 @@ void mc_control(client register_if reg) {
               state_m1.position = OPEN_POS_ES;
               state_m1.target_position = state_m1.position;
               state_m1.actuator = BUTTON; 
-              stop_motor(p_m2_on, &state_m1, reg);
+              stop_motor(&state_m1, reg);
               break;
 
             // p_es_m2_closed triggered
@@ -658,7 +754,7 @@ void mc_control(client register_if reg) {
               state_m1.position = CLOSED_POS_ES;
               state_m1.target_position = state_m1.position;
               state_m1.actuator = BUTTON; 
-              stop_motor(p_m2_on, &state_m1, reg);
+              stop_motor(&state_m1, reg);
               break;
 #endif
 

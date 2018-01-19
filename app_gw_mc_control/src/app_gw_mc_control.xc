@@ -243,6 +243,14 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 }
 
 void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg) {
+  if(ms->state == ERROR) {
+    printf("Motor %d is in ERROR state, ignoring control button change\n", ms->motor_idx);
+    return;
+  }
+  if(ms->state == STATE_UNKNOWN) {
+    printf("Motor %d is in STATE_UNKNOWN state, ignoring control button change\n", ms->motor_idx);
+    return;
+  }
   if(bit_set(CLOSE_BUTTON_IDX, motor_control_buttons)) {
     if(ms->state == CLOSING) {
       // close button pressed again whilst closing -> switch off

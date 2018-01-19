@@ -37,8 +37,11 @@
 #include <platform.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <i2c.h>
 #include "i2c_app.h"
+#include <quadflashlib.h>
+#include <quadflash.h>
 #include "debug_print.h"
 
 #define TEST_MODE 1
@@ -82,6 +85,8 @@
 
 #define MC_TILE tile[0]
 
+#define FLASH_DATA_VALID_BYTE 0x3C // arbitrary value
+#define FLASH_DATA_BYTES 4
 // Login raspiviv
 // raspiviv
 // nX9NypBk
@@ -124,6 +129,25 @@ on MC_TILE : port p_led = XS1_PORT_4F;
 
 on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4A;
 on MC_TILE : port p_m2_pushbutton_leds = XS1_PORT_4E;
+
+// Ports for QuadSPI access on explorerKIT.
+fl_QSPIPorts ports = {
+   PORT_SQI_CS,
+   PORT_SQI_SCLK,
+   PORT_SQI_SIO,
+   on tile[0]: XS1_CLKBLK_1
+};
+
+ // List of QuadSPI devices that are supported by default.
+ fl_QuadDeviceSpec deviceSpecs[] =
+ {
+   FL_QUADDEVICE_SPANSION_S25FL116K,
+   FL_QUADDEVICE_SPANSION_S25FL132K,
+   FL_QUADDEVICE_SPANSION_S25FL164K,
+   FL_QUADDEVICE_ISSI_IS25LQ080B,
+   FL_QUADDEVICE_ISSI_IS25LQ016B,
+   FL_QUADDEVICE_ISSI_IS25LQ032B,
+};
 
 typedef enum {
     OPENING,
@@ -395,6 +419,18 @@ int stop_motor(motor_state_s* ms, client register_if reg) {
     reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
 
     printf("Stopped Motor %u at position %d mm\n", ms->motor_idx, ms->position);
+
+    unsigned char *page_buffer;
+    page_buffer = malloc(fl_getWriteScratchSize(0, 2));
+    unsigned char data[2] = {FLASH_DATA_VALID_BYTE, ms->position};
+
+    printf("Writing new motor position %d to flash for Motor %d\n", ms->position, ms->motor_idx);
+    fl_writeData(ms->motor_idx*2,
+                 2,
+                 data,
+                 page_buffer);
+
+    free(page_buffer);
 }
 
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) {
@@ -485,10 +521,34 @@ void mc_control(client register_if reg) {
     p_es_m2_closed :> es_m2_closed_val;
 #endif
 
+    // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
+    if(fl_connectToDevice(ports, deviceSpecs, sizeof(deviceSpecs)/sizeof(fl_QuadDeviceSpec)) != 0) {
+      printf("fl_connectToDevice Error\n");
+      return 1; 
+    }
+    // Read Motor positions from flash
+    char byte_buffer[FLASH_DATA_BYTES];
+    // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
+    if(fl_readData(0, FLASH_DATA_BYTES, byte_buffer) != 0) {
+      printf("fl_readData Error\n");
+      return 1;
+    }
+    printf("fl_readData Read %d bytes from flash:\n", FLASH_DATA_BYTES);
+    for(unsigned i=0; i<FLASH_DATA_BYTES; ++i) {
+      printf("0x%x %d\n", byte_buffer[i], byte_buffer[i]);
+    }
 
     int m0_pos = -1; // ivalid
     int m1_pos = -1; // invalid
 
+    if(byte_buffer[0] == FLASH_DATA_VALID_BYTE) {
+      m0_pos = byte_buffer[1];
+      printf("Found valid position for Motor 1: %d\n", m0_pos);
+    } 
+    if(byte_buffer[2] == FLASH_DATA_VALID_BYTE) {
+      m1_pos = byte_buffer[3];
+      printf("Found valid position for Motor 2: %d\n", m1_pos);
+    } 
 
     // Is this needed??
     p_control_buttons :> prev_control_buttons_val;

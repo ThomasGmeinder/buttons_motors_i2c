@@ -15,6 +15,8 @@
 // - Web server sends open command with a new target position. A: start_motor OPENING with target position X
 // Note: When a I2C command comes in from the server whilst the motor is running, then ignore it
 
+// User Guide:
+// Flash with 8k Datapartition: xflash bin/app_gw_mc_control.xe --boot-partition-size 516096
 
 // Todo:
 // Change relais control signals to active low. Relais inputs are pulled high on he releais so default (high) should mean off
@@ -111,22 +113,22 @@ on MC_TILE : in port p_control_buttons = XS1_PORT_4D;
 
 /** Outputs **/
 // Motor 1 on/off
-on MC_TILE : out port p_m1_on = XS1_PORT_1F;  // X0D13
+on MC_TILE : out port p_m0_on = XS1_PORT_1F;  // X0D13
 // Motor 1 direction
-on MC_TILE : out port p_m1_dir = XS1_PORT_1E;  // X0D12
+on MC_TILE : out port p_m0_dir = XS1_PORT_1E;  // X0D12
 
 // Motor 2 on/off
-on MC_TILE : out port p_m2_on = XS1_PORT_1P;  // X0D39
+on MC_TILE : out port p_m1_on = XS1_PORT_1P;  // X0D39
 // Motor 2 direction
-on MC_TILE : out port p_m2_dir = XS1_PORT_1O;  // X0D38
+on MC_TILE : out port p_m1_dir = XS1_PORT_1O;  // X0D38
 
 on MC_TILE : port p_slave_scl = XS1_PORT_1M; // X0D36 // connect to GPIO 3 on rPI
 on MC_TILE : port p_slave_sda = XS1_PORT_1N; // X0D37 // connect to GPIO 2 on rPI
 
 on MC_TILE : port p_led = XS1_PORT_4F;
 
-on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4A;
-on MC_TILE : port p_m2_pushbutton_leds = XS1_PORT_4E;
+on MC_TILE : port p_m0_pushbutton_leds = XS1_PORT_4A; // X0D02, X0D03, X0D08, X0D09
+on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E;
 
 // Ports for QuadSPI access on explorerKIT.
 fl_QSPIPorts ports = {
@@ -396,21 +398,25 @@ void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_
   // Todo: Check OPEN_TOLERANCE, CLOSED_TOLERANCE, motor state
   if(ms->state == OPENING) {
     if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
+       printf("OPENING speed estimation too slow. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
        // speed estimation too slow. 
        // Todo: compute speed estimation error
        //ms->error = SPEED_ESTIMATION_SLOW
     } else if(OPEN_POS_ES - ms->position > OPEN_TOLERANCE) {
+       printf("OPENING speed estimation too fast. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
        // Ventilation went past Endswitch -> speed estimation too fast
        // This case should not happen. Motor should have been stopped already by case tmr_pos
        // Todo: compute speed estimation error
     }
   }
   if(ms->state == CLOSING) {
-    if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
+    if(ms->position - CLOSED_POS_ES > OPEN_TOLERANCE) {
+       printf("CLOSING speed estimation too fast. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
        // Ventilation went past Endswitch -> speed estimation too fast
        // This case should not happen. Motor should have been stopped already by case tmr_pos
        // Todo: compute speed estimation error
-    } else if(OPEN_POS_ES - ms->position > OPEN_TOLERANCE) {
+    } else if(CLOSED_POS_ES - ms->position > OPEN_TOLERANCE) {
+       printf("CLOSING speed estimation too slow. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
        // speed estimation too slow. 
        // Todo: compute speed estimation error
        //ms->error = SPEED_ESTIMATION_SLOW
@@ -440,17 +446,17 @@ void upate_pushbutton_leds(motor_state_s* ms) {
    }
 
    if(ms->motor_idx == 0) {
-     p_m1_pushbutton_leds <: led_on_mask;
+     p_m0_pushbutton_leds <: led_on_mask;
    } else {
-     p_m2_pushbutton_leds <: led_on_mask;
+     p_m1_pushbutton_leds <: led_on_mask;
    }
 }
 
 int stop_motor(motor_state_s* ms, client register_if reg) {
     if(ms->motor_idx == 0) {
-      p_m1_on <: MOTOR_OFF;
+      p_m0_on <: MOTOR_OFF;
     } else {
-      p_m2_on <: MOTOR_OFF;
+      p_m1_on <: MOTOR_OFF;
     }
     ms->state = STOPPED;
 
@@ -494,13 +500,13 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
   }
 
   if(ms->motor_idx == 0) {
+    p_m0_dir <: dir_val;
+    delay_us(10000); // delay 10ms to make sure the big capacitor is connected when motor is switched on
+    p_m0_on <: MOTOR_ON;
+  } else {
     p_m1_dir <: dir_val;
     delay_us(10000); // delay 10ms to make sure the big capacitor is connected when motor is switched on
-    p_m1_on <: MOTOR_ON;
-  } else {
-    p_m2_dir <: dir_val;
-    delay_us(10000); // delay 10ms to make sure the big capacitor is connected when motor is switched on
-    p_m2_on <: MOTOR_ON;  
+    p_m1_on <: MOTOR_ON;  
   }
 
   upate_pushbutton_leds(ms);

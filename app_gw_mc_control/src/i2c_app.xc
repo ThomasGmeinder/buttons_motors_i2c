@@ -6,7 +6,9 @@
 #include "debug_print.h"
 #include "i2c_app.h"
 
-
+// Todo: Add Error type and value register for each motor
+// Errors: UNKNOWN_POSITION, SPEED_ESTIMATION, 
+// Todo: Store the last known Motor position in flash.
 
 reg_access_t register_access[NUM_REGISTERS] = {
    RW,

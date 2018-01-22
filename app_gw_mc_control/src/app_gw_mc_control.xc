@@ -93,16 +93,7 @@
 
 
 /** Inputs **/
-// Motor 1 closed endswitch
-on MC_TILE : in port p_es_m1_closed = XS1_PORT_1L;  // X0D35
-// Motor 2 closed endswitch
-on MC_TILE : in port p_es_m2_closed = XS1_PORT_1K;  // X0D34
-
-// Motor 1 open endswitch
-on MC_TILE : in port p_es_m1_open = XS1_PORT_1J;    // X0D25
-// Motor 2 open endswitch
-on MC_TILE : in port p_es_m2_open = XS1_PORT_1I;    // X0D24
-
+// Endswitches for both Motors
 on MC_TILE : in port p_endswitches = XS1_PORT_4C;   // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
 //on MC_TILE : in port p_endswitches = XS1_PORT_4E;  
 
@@ -304,42 +295,6 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
     // Check endswitches and compare with position read from flash
     check_endswitches_and_update_states(endswitches_val, ms, reg);
 
-#if 0
-    // Determine state and position based on the End switches
-    if(es_open_val == ES_TRIGGERED && es_closed_val == ES_TRIGGERED) {
-       #if TEST_MODE
-       ms->state = STOPPED;
-       ms->position = CLOSED_POS_ES; // invalid
-       ms->target_position = CLOSED_POS_ES; // safer to have it closed
-       #else
-       // Both switches active is eror state
-       printf("ERROR: Both endswitches are on -> invalid\n");
-       ms->state = ERROR;
-       ms->position = -1; // invalid
-       ms->target_position = CLOSED_POS_ES; // safer to have it closed
-       #endif
-    } else if(es_open_val == !ES_TRIGGERED && es_closed_val == !ES_TRIGGERED) {
-       #if TEST_MODE
-       ms->state = STOPPED;
-       ms->position = CLOSED_POS_ES; // invalid
-       ms->target_position = CLOSED_POS_ES; // safer to have it closed
-       #else 
-       printf("ERROR: Both endswitches are off -> unknown position somewhere between OPEN_POS_ES and CLOSED_POS_ES\n");
-       ms->state = ERROR;
-       // Todo: Handle this case:
-       ms->position = -1; // invalid
-       ms->target_position = CLOSED_POS_ES; // safer to have it closed
-       #endif
-    } else if(es_open_val == ES_TRIGGERED) {
-       ms->position = OPEN_POS_ES;
-       ms->target_position = OPEN_POS_ES;
-       ms->state = STOPPED;
-    } else if(es_closed_val == ES_TRIGGERED) {
-       ms->position = CLOSED_POS_ES;
-       ms->target_position = CLOSED_POS_ES;
-       ms->state = STOPPED;
-    } 
-#endif
 }
 
 int target_pos_reached(motor_state_s* ms) {
@@ -544,7 +499,6 @@ void mc_control(client register_if reg) {
     unsigned endswitches_changed = 0;
 
     unsigned prev_control_buttons_val, prev_endswitches_val;
-    unsigned prev_es_m1_open_val, prev_es_m1_closed_val, prev_es_m2_open_val, prev_es_m2_closed_val;
     unsigned led_val = 0;
 
     printf("Starting Greenhouse Motor Control Application\n\n");
@@ -558,18 +512,6 @@ void mc_control(client register_if reg) {
       // enable internal pulldowns for low active 
       set_port_pull_up(p_endswitches);
     #endif
-
-#if ENDSWITCHES_ON_ONEBIT_PORTS
-    // Todo: remove 1-bit ports for endswitches
-    // read the endswitches and init motor states
-    // Note: Had to move endswitch detection to another task to workaround compiler bug
-    unsigned es_m1_open_val, es_m1_closed_val, es_m2_open_val, es_m2_closed_val;
-
-    p_es_m1_open :> es_m1_open_val;
-    p_es_m1_closed :> es_m1_closed_val;
-    p_es_m2_open :> es_m2_open_val;
-    p_es_m2_closed :> es_m2_closed_val;
-#endif
 
     // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
     if(fl_connectToDevice(ports, deviceSpecs, sizeof(deviceSpecs)/sizeof(fl_QuadDeviceSpec)) != 0) {
@@ -619,12 +561,6 @@ void mc_control(client register_if reg) {
     while(1) {
         // input from all input ports and store in prev values
         // prev values are instrumental in the case guards to detect the desired edge
-#if ENDSWITCHES_ON_ONEBIT_PORTS
-        p_es_m1_open :> prev_es_m1_open_val;
-        p_es_m1_closed :> prev_es_m1_closed_val;
-        p_es_m2_open :> prev_es_m2_open_val;
-        p_es_m2_closed :> prev_es_m2_closed_val;
-#endif 
 
         // event handlers
         select {
@@ -759,50 +695,6 @@ void mc_control(client register_if reg) {
               upate_pushbutton_leds(&state_m0);
               upate_pushbutton_leds(&state_m1);
               break;
-
-
-#if ENDSWITCHES_ON_ONEBIT_PORTS
-            // Todo: Add a check that the estimated position is close to the endswitch position
-            // Todo: Add a check to make sure that when open endswitch was triggered the state was OPENING  
-            // Set state to error in both cases 
-            // p_es_m1_open triggered
-            case (prev_es_m1_open_val != ES_TRIGGERED) => p_es_m1_open when pinseq(ES_TRIGGERED) :> void:
-              printf("Motor 1 open endswitch triggered\n");
-              check_motor_state_after_endswitch_triggered(state_m0, OPENING, OPEN_POS_ES);
-              state_m0.position = OPEN_POS_ES;
-              state_m0.target_position = state_m0.position;
-              state_m0.actuator = BUTTON; 
-              stop_motor(&state_m0, reg);
-              break;
-
-            // p_es_m1_closed triggered
-            case (prev_es_m1_closed_val != ES_TRIGGERED) => p_es_m1_closed when pinseq(ES_TRIGGERED) :> void:
-              printf("Motor 1 closed endswitch triggered\n");  
-              check_motor_state_after_endswitch_triggered(state_m0, OPENING, OPEN_POS_ES);
-              state_m0.position = CLOSED_POS_ES;
-              state_m0.target_position = state_m0.position;              
-              state_m0.actuator = BUTTON; 
-              stop_motor(&state_m0, reg);
-              break;
-
-            // p_es_m2_open triggered
-            case (prev_es_m2_open_val != ES_TRIGGERED) => p_es_m2_open when pinseq(ES_TRIGGERED) :> void:
-              printf("Motor 2 open endswitch triggered\n");  
-              state_m1.position = OPEN_POS_ES;
-              state_m1.target_position = state_m1.position;
-              state_m1.actuator = BUTTON; 
-              stop_motor(&state_m1, reg);
-              break;
-
-            // p_es_m2_closed triggered
-            case (prev_es_m2_closed_val != ES_TRIGGERED) => p_es_m2_closed when pinseq(ES_TRIGGERED) :> void:
-              printf("Motor 2 closed endswitch triggered\n");  
-              state_m1.position = CLOSED_POS_ES;
-              state_m1.target_position = state_m1.position;
-              state_m1.actuator = BUTTON; 
-              stop_motor(&state_m1, reg);
-              break;
-#endif
 
         }
     }

@@ -162,6 +162,7 @@ typedef struct {
 
     motor_state_t state;
     motor_error_t error;
+    motor_error_t prev_error;
 } motor_state_s;
 
 void delay_us(unsigned time_us) {
@@ -202,13 +203,38 @@ int motor_endswitches_triggered(unsigned endswitches_val, unsigned mask) {
   return 1;
 }
 
-void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state_s* ms, client register_if reg) {
+void update_error_state(motor_state_s* ms, client register_if reg) {
+   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
+   unsigned error_reg_val = ms->error;
+   if(ms->prev_error != NO_ERROR && ms->error == NO_ERROR) {
+     // clear the error!
+     error_reg_val = ms->prev_error | 0x40; // set cleared bit
+     printf("Clearing Error %d for Motor %d\n", ms->error, ms->motor_idx);
+   } else if(ms->prev_error == NO_ERROR && ms->error != NO_ERROR) {
+     printf("Setting new Error %d for Motor %d\n", ms->error, ms->motor_idx);
+   } else if(ms->prev_error != ms->error) {
+     printf("A new error %d occured before the previous error %d was cleared\n", ms->error, ms->prev_error);
+   }
+
+   ms->prev_error = ms->error; // update prev error
+
+   // Todo review if it is enough to set error reg here
+   reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, error_reg_val); 
+}
+
+void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state_s* ms, client register_if reg, unsigned init) {
    printf("Checking endswitches portval 0x%x for Motor %d\n", motor_endswitches, ms->motor_idx);  
+
+   unsigned update_error = 0; 
+   if(init) {
+     update_error = 1; // update when this function is called during initislisation
+   }
 
    if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN | ENDSWITCH_CLOSED)) {
      ms->state = STATE_UNKNOWN;
      ms->error = ENDSWITCH_ERROR;
      printf("Fatal Error: Both Endswitches on Motor %d triggered at the same time\n", ms->motor_idx);
+     update_error = 1;
      // todo: store and report Error
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN)) {
      printf("Motor %d open endswitch triggered\n", ms->motor_idx);
@@ -219,6 +245,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
      ms->actuator = BUTTON; 
      ms->position = OPEN_POS_ES;
      ms->target_position = ms->position;
+     update_error = 1;
      stop_motor(ms, reg);
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
      printf("Motor %d closed endswitch triggered\n", ms->motor_idx);
@@ -229,13 +256,13 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
      ms->actuator = BUTTON; 
      ms->position = CLOSED_POS_ES;
      ms->target_position = ms->position;
+     update_error = 1;
      stop_motor(ms, reg);
    };
 
-   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
-   // Todo review if it is enough to set error reg here
-   reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, ms->error); 
-
+   if(update_error) {
+     update_error_state(ms, reg);
+   }
 }
 
 void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg) {
@@ -286,7 +313,7 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
 void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, unsigned endswitches_val, unsigned motor_idx) {
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
-
+    ms->prev_error = NO_ERROR;
     if(motor_pos == -1) {
       ms->state = STATE_UNKNOWN;
       ms->error = POSITION_UNKNOWN;      
@@ -297,7 +324,7 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
       ms->error = NO_ERROR;
     }
     // Check endswitches and compare with position read from flash
-    check_endswitches_and_update_states(endswitches_val, ms, reg);
+    check_endswitches_and_update_states(endswitches_val, ms, reg, 1);
 
 }
 
@@ -653,8 +680,8 @@ void mc_control(client register_if reg) {
                 endswitches_m0 = endswitches_val & 0b11;
                 endswitches_m1 = (endswitches_val >> 2) & 0b11;
                 printf("Endswitches changed to value 0x%x\n", endswitches_val);
-                check_endswitches_and_update_states(endswitches_m0, &state_m0, reg); // Check that Open and Closed are not triggered at the same time
-                check_endswitches_and_update_states(endswitches_m1, &state_m1, reg); // Check that Open and Closed are not triggered at the same time
+                check_endswitches_and_update_states(endswitches_m0, &state_m0, reg, 0); // Check that Open and Closed are not triggered at the same time
+                check_endswitches_and_update_states(endswitches_m1, &state_m1, reg, 0); // Check that Open and Closed are not triggered at the same time
               }
               break;
 

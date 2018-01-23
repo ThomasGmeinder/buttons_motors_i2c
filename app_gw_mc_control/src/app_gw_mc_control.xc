@@ -149,12 +149,6 @@ typedef enum {
 } motor_state_t;
 
 typedef enum {
-    NO_ERROR,
-    POSITION_UNKNOWN,
-    ENDSWITCH_ERROR,
-} motor_error_t;
-
-typedef enum {
     I2C = 0,
     BUTTON = 1,
 } actuator_t;
@@ -217,22 +211,31 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
      printf("Fatal Error: Both Endswitches on Motor %d triggered at the same time\n", ms->motor_idx);
      // todo: store and report Error
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN)) {
-     check_motor_state_after_endswitch_triggered(ms, OPENING, OPEN_POS_ES);
      printf("Motor %d open endswitch triggered\n", ms->motor_idx);
+     ms->error = NO_ERROR;
+     check_motor_state_after_endswitch_triggered(ms, OPENING, OPEN_POS_ES);
+
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
      ms->position = OPEN_POS_ES;
      ms->target_position = ms->position;
      stop_motor(ms, reg);
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
-     check_motor_state_after_endswitch_triggered(ms, CLOSING, CLOSED_POS_ES);
      printf("Motor %d closed endswitch triggered\n", ms->motor_idx);
+     ms->error = NO_ERROR; // can be overridden!
+     check_motor_state_after_endswitch_triggered(ms, CLOSING, CLOSED_POS_ES);
+
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
      ms->position = CLOSED_POS_ES;
      ms->target_position = ms->position;
      stop_motor(ms, reg);
    };
+
+   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
+   // Todo review if it is enough to set error reg here
+   reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, ms->error); 
+
 }
 
 void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg) {
@@ -291,6 +294,7 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
       ms->state = STOPPED;
       ms->position = motor_pos;
       ms->target_position = ms->position;
+      ms->error = NO_ERROR;
     }
     // Check endswitches and compare with position read from flash
     check_endswitches_and_update_states(endswitches_val, ms, reg);
@@ -344,9 +348,11 @@ void init_regs(motor_state_s* ms, client register_if reg) {
   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
   // Causes server control to take over after I2C control: 
   reg.set_register(base_reg, ms->state); 
-  reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  ms->target_position);
-  reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, ms->position);
-  reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
+  if(ms->error == NO_ERROR) { // Only init if there was no error
+    reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  ms->target_position);
+    reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, ms->position);
+    reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
+  }
 }
 
 void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position) {
@@ -583,6 +589,7 @@ void mc_control(client register_if reg) {
                 }
                 case MOTOR_TARGET_POS_REG_OFFSET: {
                   state_m0.target_position = value;
+                  printf("I2C command setting new target_position %d for Motor 0\n", value);
                   break;
                 }
                 case NUM_REGS_PER_MOTOR+MOTOR_STATE_REG_OFFSET: {
@@ -595,8 +602,9 @@ void mc_control(client register_if reg) {
                   }
                   break;
                 }
-                case NUM_REGS_PER_MOTOR+MOTOR_TARGET_POS_REG_OFFSET: {
+                case NUM_REGS_PER_MOTOR+MOTOR_TARGET_POS_REG_OFFSET: {  
                   state_m1.target_position = value;
+                  printf("I2C command setting new target_position %d for Motor 1\n", value);
                   break;
                 }
               }

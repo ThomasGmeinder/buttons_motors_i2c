@@ -16,8 +16,10 @@ reg_access_t register_access[NUM_REGISTERS] = {
    R,
    R, 
    R,
+   R,
    RW,
    RW,
+   R,
    R,
    R,
    R,
@@ -41,12 +43,14 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
   // 2          R           Motor 1 current position
   // 3          R           Motor 1 actuator
   // 4          R           Motor 1 event reg
+  // 5          R           Motor 1 error reg
 
-  // 5          RW          Motor 2 state
-  // 6          RW          Motor 2 target position
-  // 7          R           Motor 2 current position
-  // 8          R           Motor 2 actuator
-  // 9          R           Motor 1 event reg
+  // 6          RW          Motor 2 state
+  // 7          RW          Motor 2 target position
+  // 8          R           Motor 2 current position
+  // 9          R           Motor 2 actuator
+  // 10         R           Motor 2 event reg
+  // 11         R           Motor 2 error reg
 
   // Note: Status register is used to enable handshake between remote client and this program.
   // It is cleared only after the remote client read it to ensure that the event that the motor position was changed locally is not missed
@@ -143,10 +147,11 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
         data = registers[current_regnum];
         debug_printf("REGFILE: reg[%d] -> %d\n", current_regnum, data);
 
-        if(get_motor_reg_idx(current_regnum) == 3) {
-          // clear actuator register
-          // Todo: Is this necessary?
-          //registers[current_regnum] = 0;
+        if(get_motor_reg_idx(current_regnum) == 5) {
+          // clear error register
+          registers[current_regnum] = NO_ERROR;
+          debug_printf("REGFILE clearing Error event register %d after read\n", current_regnum);
+
         }
         if(get_motor_reg_idx(current_regnum) == 4)  // Button event register
           { 

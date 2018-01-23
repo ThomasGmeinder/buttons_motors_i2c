@@ -14,6 +14,12 @@ typedef enum {
     STOP,
 } motor_event_t;
 
+typedef enum {
+    NO_ERROR,
+    POSITION_UNKNOWN,
+    ENDSWITCH_ERROR,
+} motor_error_t;
+
 /*
  * Interface definition between user application and I2C slave register file
  */
@@ -39,7 +45,7 @@ typedef interface register_if {
   slave void register_changed();
 } register_if;
 
-#define NUM_REGS_PER_MOTOR 5
+#define NUM_REGS_PER_MOTOR 6
 #define NUM_MOTORS 2
 #define NUM_REGISTERS NUM_REGS_PER_MOTOR * NUM_MOTORS
 
@@ -48,6 +54,7 @@ typedef interface register_if {
 #define MOTOR_CURRENT_POS_REG_OFFSET 2
 #define MOTOR_ACTUATOR_REG_OFFSET 3
 #define MOTOR_EVENT_REG_OFFSET 4
+#define MOTOR_ERROR_REG_OFFSET 5
 
 [[distributable]]
 void i2c_slave_register_file(server i2c_slave_callback_if i2c, server register_if app);

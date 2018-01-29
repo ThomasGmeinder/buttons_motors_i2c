@@ -174,7 +174,7 @@ void delay_us(unsigned time_us) {
 
 // protos
 int stop_motor(motor_state_s* ms, client register_if reg);
-void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position);
+void check_motor_state_after_endswitch_triggered(motor_state_s* ms, client register_if reg, motor_state_t state, int actual_position);
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator);
 
 // Functions
@@ -204,12 +204,12 @@ int motor_endswitches_triggered(unsigned endswitches_val, unsigned mask) {
 }
 
 void update_error_state(motor_state_s* ms, client register_if reg) {
-   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
+
    unsigned error_reg_val = ms->error;
    if(ms->prev_error != NO_ERROR && ms->error == NO_ERROR) {
      // clear the error!
      error_reg_val = ms->prev_error | 0x40; // set cleared bit
-     printf("Clearing Error %d for Motor %d\n", ms->error, ms->motor_idx);
+     printf("Clearing Error %d for Motor %d\n", ms->prev_error, ms->motor_idx);
    } else if(ms->prev_error == NO_ERROR && ms->error != NO_ERROR) {
      printf("Setting new Error %d for Motor %d\n", ms->error, ms->motor_idx);
    } else if(ms->prev_error != ms->error) {
@@ -219,6 +219,7 @@ void update_error_state(motor_state_s* ms, client register_if reg) {
    ms->prev_error = ms->error; // update prev error
 
    // Todo review if it is enough to set error reg here
+   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
    reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, error_reg_val); 
 }
 
@@ -239,7 +240,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN)) {
      printf("Motor %d open endswitch triggered\n", ms->motor_idx);
      ms->error = NO_ERROR;
-     check_motor_state_after_endswitch_triggered(ms, OPENING, OPEN_POS_ES);
+     check_motor_state_after_endswitch_triggered(ms, reg, OPENING, OPEN_POS_ES);
 
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
@@ -250,7 +251,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
      printf("Motor %d closed endswitch triggered\n", ms->motor_idx);
      ms->error = NO_ERROR; // can be overridden!
-     check_motor_state_after_endswitch_triggered(ms, CLOSING, CLOSED_POS_ES);
+     check_motor_state_after_endswitch_triggered(ms, reg, CLOSING, CLOSED_POS_ES);
 
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
@@ -383,37 +384,28 @@ void init_regs(motor_state_s* ms, client register_if reg) {
   }
 }
 
-void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position) {
+void check_motor_state_after_endswitch_triggered(motor_state_s* ms, client register_if reg, motor_state_t state, int actual_position) {
   // Todo: Check OPEN_TOLERANCE, CLOSED_TOLERANCE, motor state
   if(ms->state == OPENING) {
     if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
-       printf("OPENING speed estimation too slow. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
-       // speed estimation too slow. 
-       // Todo: compute speed estimation error
-       //ms->error = SPEED_ESTIMATION_SLOW
+       printf("OPENING speed slower than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
+       ms->error = SPEED_TOO_SLOW; // Motor slower than estimation
     } else if(OPEN_POS_ES - ms->position > OPEN_TOLERANCE) {
-       printf("OPENING speed estimation too fast. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
-       // Ventilation went past Endswitch -> speed estimation too fast
-       // This case should not happen. Motor should have been stopped already by case tmr_pos
-       // Todo: compute speed estimation error
+       printf("OPENING speed faster than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
+       ms->error = SPEED_TOO_FAST; // Motor faster than estimation
     }
   }
   if(ms->state == CLOSING) {
     if(ms->position - CLOSED_POS_ES > OPEN_TOLERANCE) {
-       printf("CLOSING speed estimation too fast. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
-       // Ventilation went past Endswitch -> speed estimation too fast
-       // This case should not happen. Motor should have been stopped already by case tmr_pos
-       // Todo: compute speed estimation error
+       printf("CLOSING speed faster than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
+       ms->error = SPEED_TOO_FAST; // Motor slower than estimation
     } else if(CLOSED_POS_ES - ms->position > OPEN_TOLERANCE) {
-       printf("CLOSING speed estimation too slow. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
-       // speed estimation too slow. 
-       // Todo: compute speed estimation error
-       //ms->error = SPEED_ESTIMATION_SLOW
+       printf("CLOSING speed slower than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
+       ms->error = SPEED_TOO_SLOW; // Motor slower than estimation
     }   
   } 
-  //int diff = ms.position - actual_position;
-  //if(diff < 0) diff = -diff;
-  //if(diff > tolerance) // update error register so it can be read by Server
+
+  update_error_state(ms, reg);
 }
 
 
@@ -476,6 +468,15 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
 
   ms->actuator = actuator;
 
+  // Update regs and other state straight away to avoid races
+  int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
+  reg.set_register(base_reg, ms->state); 
+  reg.set_register(base_reg+MOTOR_EVENT_REG_OFFSET, START);
+  reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
+  upate_pushbutton_leds(ms);
+  update_position_regs(ms, reg);
+
+  // Do the switching
   unsigned dir_val;
   if(ms->state == OPENING) {
     dir_val = MOTOR_OPENING_DIR;
@@ -497,14 +498,6 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
     delay_us(10000); // delay 10ms to make sure the big capacitor is connected when motor is switched on
     p_m1_on <: MOTOR_ON;  
   }
-
-  upate_pushbutton_leds(ms);
-  update_position_regs(ms, reg);
-  // register start event
-  int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
-  reg.set_register(base_reg, ms->state); 
-  reg.set_register(base_reg+MOTOR_EVENT_REG_OFFSET, START);
-  reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
 
   return 0;
 }

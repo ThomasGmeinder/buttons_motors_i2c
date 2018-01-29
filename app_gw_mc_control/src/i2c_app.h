@@ -18,6 +18,8 @@ typedef enum {
     NO_ERROR,
     POSITION_UNKNOWN,
     ENDSWITCH_ERROR,
+    SPEED_TOO_SLOW, 
+    SPEED_TOO_FAST,     
 } motor_error_t;
 
 /*

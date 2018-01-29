@@ -319,10 +319,10 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
       ms->error = POSITION_UNKNOWN;      
     } else {
       ms->state = STOPPED;
-      ms->position = motor_pos;
-      ms->target_position = ms->position;
       ms->error = NO_ERROR;
     }
+    ms->position = motor_pos;
+    ms->target_position = ms->position;
     // Check endswitches and compare with position read from flash
     check_endswitches_and_update_states(endswitches_val, ms, reg, 1);
 
@@ -375,10 +375,11 @@ void init_regs(motor_state_s* ms, client register_if reg) {
   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
   // Causes server control to take over after I2C control: 
   reg.set_register(base_reg, ms->state); 
+  reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
+
   if(ms->error == NO_ERROR) { // Only init if there was no error
     reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  ms->target_position);
     reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, ms->position);
-    reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
   }
 }
 

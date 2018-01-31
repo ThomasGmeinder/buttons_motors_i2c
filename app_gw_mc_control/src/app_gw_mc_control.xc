@@ -174,7 +174,7 @@ void delay_us(unsigned time_us) {
 
 // protos
 int stop_motor(motor_state_s* ms, client register_if reg);
-void check_motor_state_after_endswitch_triggered(motor_state_s* ms, client register_if reg, motor_state_t state, int actual_position);
+void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position);
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator);
 
 // Functions
@@ -240,7 +240,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN)) {
      printf("Motor %d open endswitch triggered\n", ms->motor_idx);
      ms->error = NO_ERROR;
-     check_motor_state_after_endswitch_triggered(ms, reg, OPENING, OPEN_POS_ES);
+     check_motor_state_after_endswitch_triggered(ms, OPENING, OPEN_POS_ES);
 
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
@@ -251,7 +251,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
      printf("Motor %d closed endswitch triggered\n", ms->motor_idx);
      ms->error = NO_ERROR; // can be overridden!
-     check_motor_state_after_endswitch_triggered(ms, reg, CLOSING, CLOSED_POS_ES);
+     check_motor_state_after_endswitch_triggered(ms, CLOSING, CLOSED_POS_ES);
 
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
@@ -384,7 +384,7 @@ void init_regs(motor_state_s* ms, client register_if reg) {
   }
 }
 
-void check_motor_state_after_endswitch_triggered(motor_state_s* ms, client register_if reg, motor_state_t state, int actual_position) {
+void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position) {
   // Todo: Check OPEN_TOLERANCE, CLOSED_TOLERANCE, motor state
   if(ms->state == OPENING) {
     if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
@@ -404,8 +404,6 @@ void check_motor_state_after_endswitch_triggered(motor_state_s* ms, client regis
        ms->error = SPEED_TOO_SLOW; // Motor slower than estimation
     }   
   } 
-
-  update_error_state(ms, reg);
 }
 
 

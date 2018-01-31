@@ -50,7 +50,7 @@ typedef interface register_if {
 #define NUM_REGS_PER_MOTOR 6
 #define NUM_MOTORS 2
 #define NUM_MOTOR_REGISTERS (NUM_REGS_PER_MOTOR * NUM_MOTORS)
-#define NUM_REGISTERS NUM_MOTOR_REGISTERS+1 // 1 System Register
+#define NUM_REGISTERS NUM_MOTOR_REGISTERS+2 // +2 System Registers
 
 #define MOTOR_STATE_REG_OFFSET 0
 #define MOTOR_TARGET_POS_REG_OFFSET 1

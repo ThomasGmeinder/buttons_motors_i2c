@@ -11,19 +11,20 @@
 // Todo: Store the last known Motor position in flash.
 
 reg_access_t register_access[NUM_REGISTERS] = {
-   RW,
-   RW,
-   R,
-   R, 
-   R,
-   R,
-   RW,
-   RW,
-   R,
-   R,
-   R,
-   R,
-   R, 
+   RW, // 0    Motor 1 state
+   RW, // 1    Motor 1 target position
+   R,  // 2    Motor 1 current position
+   R,  // 3    Motor 1 actuator
+   R,  // 4    Motor 1 event reg
+   R,  // 5    Motor 1 error reg
+   RW, // 6    Motor 2 state
+   RW, // 7    Motor 2 target position
+   R,  // 8    Motor 2 current position
+   R,  // 9    Motor 2 actuator
+   R,  // 10   Motor 2 event reg
+   R,  // 11   Motor 2 error reg
+   R,  // 12   ID Register
+   RW, // 13   Test Register
 };
 
 
@@ -39,19 +40,6 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
 {
   uint8_t registers[NUM_REGISTERS];
   // Register,  I2C Access, Function
-  // 0          RW          Motor 1 state
-  // 1          RW          Motor 1 target position
-  // 2          R           Motor 1 current position
-  // 3          R           Motor 1 actuator
-  // 4          R           Motor 1 event reg
-  // 5          R           Motor 1 error reg
-
-  // 6          RW          Motor 2 state
-  // 7          RW          Motor 2 target position
-  // 8          R           Motor 2 current position
-  // 9          R           Motor 2 actuator
-  // 10         R           Motor 2 event reg
-  // 11         R           Motor 2 error reg
 
   // Note: Status register is used to enable handshake between remote client and this program.
   // It is cleared only after the remote client read it to ensure that the event that the motor position was changed locally is not missed

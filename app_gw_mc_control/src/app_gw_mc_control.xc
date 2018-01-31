@@ -45,6 +45,7 @@
 #include <quadflashlib.h>
 #include <quadflash.h>
 #include "debug_print.h"
+#include "otp_board_info.h"
 
 #define TEST_MODE 1
 
@@ -120,6 +121,8 @@ on MC_TILE : port p_led = XS1_PORT_4F;
 
 on MC_TILE : port p_m0_pushbutton_leds = XS1_PORT_4A; // X0D02, X0D03, X0D08, X0D09
 on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E;
+
+on MC_TILE: otp_ports_t otp_ports = OTP_PORTS_INITIALIZER;
 
 // Ports for QuadSPI access on explorerKIT.
 fl_QSPIPorts ports = {
@@ -526,7 +529,17 @@ void mc_control(client register_if reg) {
     unsigned prev_control_buttons_val, prev_endswitches_val;
     unsigned led_val = 0;
 
-    printf("Starting Greenhouse Motor Control Application\n\n");
+    char mac_address[6];
+    // Read MAC address:
+    otp_board_info_get_mac(otp_ports, 0, mac_address);
+    printf("Read MAC Address");
+    for(unsigned i=0; i<6; ++i) printf("0x%x ",mac_address[i]);
+    printf("\n");  
+    // Store lowest byte of Mac address as unique ID controller 
+    char id = mac_address[5];
+    reg.set_register(SYSTEM_ID_REG_OFFSET, id);
+
+    printf("Starting Greenhouse Motor Control Application on Controller with ID 0x%x\n\n", id);
     printf("Motor speed is set to %u mm/s\n", MOTOR_SPEED);
 
 

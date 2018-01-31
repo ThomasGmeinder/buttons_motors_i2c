@@ -49,7 +49,8 @@ typedef interface register_if {
 
 #define NUM_REGS_PER_MOTOR 6
 #define NUM_MOTORS 2
-#define NUM_REGISTERS NUM_REGS_PER_MOTOR * NUM_MOTORS
+#define NUM_MOTOR_REGISTERS (NUM_REGS_PER_MOTOR * NUM_MOTORS)
+#define NUM_REGISTERS NUM_MOTOR_REGISTERS+1 // 1 System Register
 
 #define MOTOR_STATE_REG_OFFSET 0
 #define MOTOR_TARGET_POS_REG_OFFSET 1
@@ -57,6 +58,7 @@ typedef interface register_if {
 #define MOTOR_ACTUATOR_REG_OFFSET 3
 #define MOTOR_EVENT_REG_OFFSET 4
 #define MOTOR_ERROR_REG_OFFSET 5
+#define SYSTEM_ID_REG_OFFSET NUM_MOTOR_REGISTERS 
 
 [[distributable]]
 void i2c_slave_register_file(server i2c_slave_callback_if i2c, server register_if app);

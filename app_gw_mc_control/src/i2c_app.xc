@@ -23,6 +23,7 @@ reg_access_t register_access[NUM_REGISTERS] = {
    R,
    R,
    R,
+   R, 
 };
 
 

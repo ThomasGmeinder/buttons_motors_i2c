@@ -114,8 +114,8 @@ on MC_TILE : out port p_m1_on = XS1_PORT_1P;  // X0D39
 // Motor 2 direction
 on MC_TILE : out port p_m1_dir = XS1_PORT_1O;  // X0D38
 
-on MC_TILE : port p_slave_scl = XS1_PORT_1M; // X0D36 // connect to GPIO 3 on rPI
-on MC_TILE : port p_slave_sda = XS1_PORT_1N; // X0D37 // connect to GPIO 2 on rPI
+on MC_TILE : port p_slave_sda = XS1_PORT_1M; // X0D36 // connect to GPIO 3 on rPI
+on MC_TILE : port p_slave_scl = XS1_PORT_1N; // X0D37 // connect to GPIO 2 on rPI
 
 on MC_TILE : port p_led = XS1_PORT_4F;
 
@@ -743,19 +743,24 @@ void mc_control(client register_if reg) {
 
 uint8_t device_addr = 0x3c;
 
+void i2c_control(server register_if i_reg) {
+    i2c_slave_callback_if i_i2c;
+    //[[combine]]
+    par {
+        i2c_slave_register_file(i_i2c, i_reg);
+        i2c_slave(i_i2c, p_slave_scl, p_slave_sda, device_addr);
+    }
+}
+
 int main() {
 
-  i2c_slave_callback_if i_i2c;
   register_if i_reg;
  
   //debug_printf("Starting I2C enabled Motoro Controller\n");
 
     par {
-        on MC_TILE : i2c_slave_register_file(i_i2c, i_reg);
-        on MC_TILE : i2c_slave(i_i2c, p_slave_scl, p_slave_sda, device_addr);
-
-        on MC_TILE : mc_control(i_reg);
-
+      on MC_TILE : i2c_control(i_reg);
+      on MC_TILE : mc_control(i_reg);
     }
     return 0;
 }

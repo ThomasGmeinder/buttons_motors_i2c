@@ -47,7 +47,7 @@
 #include "debug_print.h"
 #include "otp_board_info.h"
 
-#define TEST_MODE 1
+#define ENDSWITCHES_ACTIVE 1
 
 #define MOTOR_SPEED 100 // in mm/s
 #define MAX_POS 100 // max position in cm
@@ -176,7 +176,7 @@ void delay_us(unsigned time_us) {
 }
 
 // protos
-int stop_motor(motor_state_s* ms, client register_if reg);
+void stop_motor(motor_state_s* ms, client register_if reg);
 void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position);
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator);
 
@@ -236,7 +236,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 
    if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN | ENDSWITCH_CLOSED)) {
      ms->state = STATE_UNKNOWN;
-     ms->error = ENDSWITCH_ERROR;
+     ms->error = BOTH_ENDSWITCHES_ON;
      printf("Fatal Error: Both Endswitches on Motor %d triggered at the same time\n", ms->motor_idx);
      update_error = 1;
      // todo: store and report Error
@@ -332,24 +332,43 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
 
 }
 
-int target_pos_reached(motor_state_s* ms) {
+void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    // Todo: Tune the system so that endswitches can trigger before OPEN_POS_LIMIT and CLOSED_POS_LIMIT is reached.
    // if position is outside of OPEN_POS_ES and CLOSED_POS_ES then it can be deducted that the Endswitch is broken
    // Todo: Check if position is outside of OPEN_POS_ES-OPEN_TOLERANCE and CLOSED_POS_ES+CLOSED_TOLERANCE
 
    if(ms->state == CLOSING) {
-     if(ms->position >= ms->target_position) {
-       printf("Closing ventilation %d reached target position %d\n", ms->motor_idx, ms->target_position);
-       return 1;
-     } 
+     #if ENDSWITCHES_ACTIVE
+       if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
+         printf("Closing ventilation %d exceeded target position %d by %d cm. Closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, CLOSED_TOLERANCE);
+         stop_motor(ms, reg);
+         ms->error = CLOSED_ENDSWITCH_DEFECT;
+         update_error_state(ms, reg);
+       }
+    #else
+       if(ms->position >= ms->target_position) {
+         printf("Closing ventilation %d reached target position %d cm\n", ms->motor_idx, ms->target_position);
+         stop_motor(ms, reg);
+       }         
+    #endif 
+
    } 
    if(ms->state == OPENING) {
-     if(ms->position <= ms->target_position) {
-       printf("Opening ventilation %d reached target position %d\n", ms->motor_idx, ms->target_position);
-       return 1;
-     } 
+     #if ENDSWITCHES_ACTIVE
+       if(ms->position <= ms->target_position - CLOSED_TOLERANCE) {
+         printf("Opening ventilation %d exceeded target position %d by %d cm. Closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, OPEN_TOLERANCE);
+         stop_motor(ms, reg);
+         ms->error = OPEN_ENDSWITCH_DEFECT;
+         update_error_state(ms, reg);
+
+       } 
+    #else
+       if(ms->position <= ms->target_position) {
+         printf("Opening ventilation %d exceeded target position %d cm\n", ms->motor_idx, ms->target_position);
+         stop_motor(ms, reg);
+       }     
+    #endif
    }
-   return 0;
 }
 
 int pos_below_min(motor_state_s* ms) {
@@ -434,7 +453,7 @@ void upate_pushbutton_leds(motor_state_s* ms) {
    }
 }
 
-int stop_motor(motor_state_s* ms, client register_if reg) {
+void stop_motor(motor_state_s* ms, client register_if reg) {
     if(ms->motor_idx == 0) {
       p_m0_on <: MOTOR_OFF;
     } else {
@@ -554,14 +573,14 @@ void mc_control(client register_if reg) {
     // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
     if(fl_connectToDevice(ports, deviceSpecs, sizeof(deviceSpecs)/sizeof(fl_QuadDeviceSpec)) != 0) {
       printf("fl_connectToDevice Error\n");
-      return 1; 
+      return; 
     }
     // Read Motor positions from flash
     char byte_buffer[FLASH_DATA_BYTES];
     // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
     if(fl_readData(0, FLASH_DATA_BYTES, byte_buffer) != 0) {
       printf("fl_readData Error\n");
-      return 1;
+      return;
     }
     printf("fl_readData Read %d bytes from flash:\n", FLASH_DATA_BYTES);
     for(unsigned i=0; i<FLASH_DATA_BYTES; ++i) {
@@ -706,9 +725,7 @@ void mc_control(client register_if reg) {
                   printf("Updated position estimate to %d mm\n", state_m0.position);
                   update_position_regs(&state_m0, reg);
 
-                  if(target_pos_reached(&state_m0)) {
-                    stop_motor(&state_m0, reg);
-                  }
+                  check_and_handle_new_pos(&state_m0, reg);
               }; 
               if(state_m1.state == OPENING || state_m1.state == CLOSING) {
                   if(state_m1.state == OPENING) {
@@ -721,9 +738,7 @@ void mc_control(client register_if reg) {
                  printf("Updated position estimate to %d mm\n", state_m1.position);
                   update_position_regs(&state_m1, reg);
 
-                  if(target_pos_reached(&state_m1)) {
-                    stop_motor(&state_m1, reg);
-                  }
+                  check_and_handle_new_pos(&state_m1, reg);
               }; 
               //Todo: if(pos_out_of_range(state_m1.position)) {
 

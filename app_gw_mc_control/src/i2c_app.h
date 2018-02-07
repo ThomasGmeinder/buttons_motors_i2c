@@ -17,7 +17,9 @@ typedef enum {
 typedef enum {
     NO_ERROR,
     POSITION_UNKNOWN,
-    ENDSWITCH_ERROR,
+    BOTH_ENDSWITCHES_ON,
+    OPEN_ENDSWITCH_DEFECT,
+    CLOSED_ENDSWITCH_DEFECT,
     SPEED_TOO_SLOW, 
     SPEED_TOO_FAST,     
 } motor_error_t;

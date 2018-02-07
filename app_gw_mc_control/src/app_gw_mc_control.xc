@@ -270,14 +270,23 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 }
 
 void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg) {
-  if(ms->state == ERROR) {
-    printf("Motor %d is in ERROR state, ignoring control button change\n", ms->motor_idx);
+  // Ignore button in case of severe errors
+  if(ms->error == BOTH_ENDSWITCHES_ON ) {
+    // Todo: Only do this for errors but not warnings?
+    printf("Motor %d is in ERROR state BOTH_ENDSWITCHES_ON, ignoring control button change\n", ms->motor_idx);
+    return;
+  }
+  if(ms->error == POSITION_UNKNOWN ) {
+    // Todo: Only do this for errors but not warnings?
+    printf("Motor %d is in ERROR state POSITION_UNKNOWN, ignoring control button change\n", ms->motor_idx);
     return;
   }
   if(ms->state == STATE_UNKNOWN) {
     printf("Motor %d is in STATE_UNKNOWN state, ignoring control button change\n", ms->motor_idx);
     return;
   }
+
+  // Process and button change
   if(bit_set(CLOSE_BUTTON_IDX, motor_control_buttons)) {
     if(ms->state == CLOSING) {
       // close button pressed again whilst closing -> switch off

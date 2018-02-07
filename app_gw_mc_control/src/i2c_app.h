@@ -14,12 +14,11 @@ typedef enum {
     STOP,
 } motor_event_t;
 
+// Todo: Maybe separate SPEED_TOO_SLOW and SPEED_TOO_FAST into a warning register
 typedef enum {
     NO_ERROR,
     POSITION_UNKNOWN,
     BOTH_ENDSWITCHES_ON,
-    OPEN_ENDSWITCH_DEFECT,
-    CLOSED_ENDSWITCH_DEFECT,
     SPEED_TOO_SLOW, 
     SPEED_TOO_FAST,     
 } motor_error_t;

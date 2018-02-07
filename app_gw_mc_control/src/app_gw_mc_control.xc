@@ -50,7 +50,7 @@
 #define ENDSWITCHES_ACTIVE 1
 
 #define MOTOR_SPEED 100 // in mm/s
-#define MAX_POS 100 // max position in cm
+#define MAX_POS 120 // max position in cm
 #define OPEN_POS_ES 0 // Open position at Endswitch
 #define OPEN_TOLERANCE 10 
 #define CLOSED_TOLERANCE 10 
@@ -340,9 +340,9 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    if(ms->state == CLOSING) {
      #if ENDSWITCHES_ACTIVE
        if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
-         printf("Closing ventilation %d exceeded target position %d by %d cm. Closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, CLOSED_TOLERANCE);
+         printf("Closing ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, CLOSED_TOLERANCE);
          stop_motor(ms, reg);
-         ms->error = CLOSED_ENDSWITCH_DEFECT;
+         ms->error = SPEED_TOO_SLOW;
          update_error_state(ms, reg);
        }
     #else
@@ -356,11 +356,10 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    if(ms->state == OPENING) {
      #if ENDSWITCHES_ACTIVE
        if(ms->position <= ms->target_position - CLOSED_TOLERANCE) {
-         printf("Opening ventilation %d exceeded target position %d by %d cm. Closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, OPEN_TOLERANCE);
+         printf("Opening ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, OPEN_TOLERANCE);
          stop_motor(ms, reg);
-         ms->error = OPEN_ENDSWITCH_DEFECT;
+         ms->error = SPEED_TOO_SLOW;
          update_error_state(ms, reg);
-
        } 
     #else
        if(ms->position <= ms->target_position) {

@@ -50,11 +50,15 @@
 #define ENDSWITCHES_ACTIVE 1
 
 #define MOTOR_SPEED 100 // in mm/s
-#define MAX_POS 120 // max position in cm
-#define OPEN_POS_ES 0 // Open position at Endswitch
-#define OPEN_TOLERANCE 10 
-#define CLOSED_TOLERANCE 10 
-#define CLOSED_POS_ES MAX_POS
+#define OPEN_POS_MIN 0 // min position in cm
+#define CLOSED_POS_MAX 120  // max 
+
+#define OPEN_TOLERANCE 2
+#define OPEN_POS_ES OPEN_POS_MIN+OPEN_TOLERANCE  // Open position at Endswitch
+
+#define CLOSED_TOLERANCE 2 
+#define CLOSED_POS_ES CLOSED_POS_MAX-CLOSED_TOLERANCE
+
 #define DEBOUNCE_TIME XS1_TIMER_HZ/50  // 20ms
 #define POS_UPDATE_PERIOD XS1_TIMER_HZ/10 // 100ms
 #define DEBOUNCE 1
@@ -294,7 +298,7 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
       ms->target_position = ms->position;
       ms->actuator = BUTTON; // This is key to update the client if caused start_motor via I2C
       stop_motor(ms, reg);
-    } else if(ms->state == STOPPED && ms->position == CLOSED_POS_ES) {
+    } else if(ms->state == STOPPED && ms->position >= CLOSED_POS_ES) {
       printf("Motor %d is already in closed position\n", ms->motor_idx);  
       // do nothing
     } else {
@@ -311,7 +315,7 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
       ms->target_position = ms->position;
       ms->actuator = BUTTON; // This is key to update the client if caused start_motor via I2C
       stop_motor(ms, reg);
-    } else if(ms->state == STOPPED && ms->position == OPEN_POS_ES) {
+    } else if(ms->state == STOPPED && ms->position <= OPEN_POS_ES) {
       printf("Motor %d is already in open position\n", ms->motor_idx);  
       // do nothing
     } else {
@@ -347,16 +351,26 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    // Todo: Check if position is outside of OPEN_POS_ES-OPEN_TOLERANCE and CLOSED_POS_ES+CLOSED_TOLERANCE
 
    if(ms->state == CLOSING) {
+     // Todo: Fix this. 
+     // It has to work like this: Tune speed estimation slightly slower than motor so that Endswitch can trigger before motor is stopped based on postion calulation
      #if ENDSWITCHES_ACTIVE
-       if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
-         printf("Closing ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, CLOSED_TOLERANCE);
-         stop_motor(ms, reg);
-         ms->error = SPEED_TOO_SLOW;
-         update_error_state(ms, reg);
+       if(ms->target_position >= CLOSED_POS_ES) { // Target position is at Closed Endswitch
+         // Endswitch should stop the motor. Double heck here based on  
+         if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
+           printf("Closing ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, CLOSED_TOLERANCE);
+           stop_motor(ms, reg);
+           ms->error = SPEED_TOO_SLOW;
+           update_error_state(ms, reg);
+         }
+       } else { 
+         if(ms->position >= ms->target_position) {
+           printf("Closing ventilation %d is >= target position %d cm\n", ms->motor_idx, ms->target_position);
+           stop_motor(ms, reg);
+         }   
        }
     #else
        if(ms->position >= ms->target_position) {
-         printf("Closing ventilation %d reached target position %d cm\n", ms->motor_idx, ms->target_position);
+         printf("Closing ventilation %d is >= target position %d cm\n", ms->motor_idx, ms->target_position);
          stop_motor(ms, reg);
        }         
     #endif 
@@ -364,34 +378,26 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    } 
    if(ms->state == OPENING) {
      #if ENDSWITCHES_ACTIVE
-       if(ms->position <= ms->target_position - CLOSED_TOLERANCE) {
-         printf("Opening ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, OPEN_TOLERANCE);
-         stop_motor(ms, reg);
-         ms->error = SPEED_TOO_SLOW;
-         update_error_state(ms, reg);
-       } 
+       if(ms->target_position <= OPEN_POS_ES) { // Target position is at Open Endswitch, 
+         if(ms->position <= ms->target_position - OPEN_TOLERANCE) {
+           printf("Opening ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, OPEN_TOLERANCE);
+           stop_motor(ms, reg);
+           ms->error = SPEED_TOO_SLOW;
+           update_error_state(ms, reg);
+         } 
+       } else {
+         if(ms->position <= ms->target_position) {
+           printf("Opening ventilation %d is <= target position %d cm\n", ms->motor_idx, ms->target_position);
+           stop_motor(ms, reg);
+         }  
+       }
     #else
        if(ms->position <= ms->target_position) {
-         printf("Opening ventilation %d exceeded target position %d cm\n", ms->motor_idx, ms->target_position);
+         printf("Opening ventilation %d is <= target position %d cm\n", ms->motor_idx, ms->target_position);
          stop_motor(ms, reg);
        }     
     #endif
    }
-}
-
-int pos_below_min(motor_state_s* ms) {
-    if(ms->position <= OPEN_POS_ES-OPEN_TOLERANCE) {
-       printf("WARNING: position estimate %d mm of Motor %d is below minimum %d mm\n", ms->position, ms->motor_idx, OPEN_POS_ES-OPEN_TOLERANCE);
-       return 1;
-    }
-    return 0;
-}
-int pos_above_max(motor_state_s* ms) {
-    if(ms->position >= CLOSED_POS_ES+CLOSED_TOLERANCE) {
-       printf("WARNING: position estimate %d mm of Motor %d is above max %d mm\n", ms->position, ms->motor_idx, CLOSED_POS_ES+CLOSED_TOLERANCE);
-       return 1;
-    }
-    return 0;
 }
 
 // Update the Read only registers

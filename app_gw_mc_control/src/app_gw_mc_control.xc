@@ -59,7 +59,7 @@
 #define CLOSED_TOLERANCE 2 
 #define CLOSED_POS_ES CLOSED_POS_MAX-CLOSED_TOLERANCE
 
-#define DEBOUNCE_TIME XS1_TIMER_HZ/50  // 20ms
+#define DEBOUNCE_TIME XS1_TIMER_HZ/10  // 100ms
 #define POS_UPDATE_PERIOD XS1_TIMER_HZ/10 // 100ms
 #define DEBOUNCE 1
 
@@ -583,6 +583,15 @@ void mc_control(client register_if reg) {
       // enable internal pulldowns for low active 
       set_port_pull_up(p_endswitches);
     #endif
+    #if BUTTON_PRESSED==1
+      // enable internal pulldowns for high active signals
+      set_port_pull_down(p_control_buttons);
+    #else 
+      // enable internal pulldowns for low active 
+      set_port_pull_up(p_control_buttons);
+    #endif
+
+
 
     // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
     if(fl_connectToDevice(ports, deviceSpecs, sizeof(deviceSpecs)/sizeof(fl_QuadDeviceSpec)) != 0) {

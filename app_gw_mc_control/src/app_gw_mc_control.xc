@@ -47,7 +47,7 @@
 #include "debug_print.h"
 #include "otp_board_info.h"
 
-#define ENDSWITCHES_ACTIVE 1
+#define ENDSWITCHES_CONNECTED 0
 
 #define MOTOR_SPEED 100 // in mm/s
 #define OPEN_POS_MIN 0 // min position in cm
@@ -231,6 +231,7 @@ void update_error_state(motor_state_s* ms, client register_if reg) {
 }
 
 void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state_s* ms, client register_if reg, unsigned init) {
+#if ENDSWITCHES_CONNECTED
    printf("Checking endswitches portval 0x%x for Motor %d\n", motor_endswitches, ms->motor_idx);  
 
    unsigned update_error = 0; 
@@ -271,6 +272,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
    if(update_error) {
      update_error_state(ms, reg);
    }
+#endif
 }
 
 void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg) {
@@ -353,7 +355,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    if(ms->state == CLOSING) {
      // Todo: Fix this. 
      // It has to work like this: Tune speed estimation slightly slower than motor so that Endswitch can trigger before motor is stopped based on postion calulation
-     #if ENDSWITCHES_ACTIVE
+     #if ENDSWITCHES_CONNECTED
        if(ms->target_position >= CLOSED_POS_ES) { // Target position is at Closed Endswitch
          // Endswitch should stop the motor. Double heck here based on  
          if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
@@ -377,7 +379,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
 
    } 
    if(ms->state == OPENING) {
-     #if ENDSWITCHES_ACTIVE
+     #if ENDSWITCHES_CONNECTED
        if(ms->target_position <= OPEN_POS_ES) { // Target position is at Open Endswitch, 
          if(ms->position <= ms->target_position - OPEN_TOLERANCE) {
            printf("Opening ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, OPEN_TOLERANCE);
@@ -610,17 +612,32 @@ void mc_control(client register_if reg) {
       printf("0x%x %d\n", byte_buffer[i], byte_buffer[i]);
     }
 
+    // Init Motor 0 position
     int m0_pos = -1; // ivalid
-    int m1_pos = -1; // invalid
-
     if(byte_buffer[0] == FLASH_DATA_VALID_BYTE) {
       m0_pos = byte_buffer[1];
-      printf("Found valid position for Motor 1: %d\n", m0_pos);
+      printf("Found valid position for Motor 0: %d\n", m0_pos);
     } 
+    #if !ENDSWITCHES_CONNECTED
+    else {
+      m0_pos = CLOSED_POS_ES;
+      printf("Endswitches not connected. Initialising Motor 0 to arbitrary position %d\n", m0_pos);
+    }
+    #endif
+    
+    // Init Motor 1 position
+    int m1_pos = -1; // invalid
     if(byte_buffer[2] == FLASH_DATA_VALID_BYTE) {
       m1_pos = byte_buffer[3];
-      printf("Found valid position for Motor 2: %d\n", m1_pos);
+      printf("Found valid position for Motor 1: %d\n", m1_pos);
     } 
+    #if !ENDSWITCHES_CONNECTED
+    else {
+      m1_pos = CLOSED_POS_ES;
+      printf("Endswitches not connected. Initialising Motor 1 to arbitrary position %d\n", m1_pos);
+    }
+    #endif
+
 
     // Is this needed??
     p_control_buttons :> prev_control_buttons_val;

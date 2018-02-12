@@ -170,6 +170,10 @@ typedef struct {
     motor_state_t state;
     motor_error_t error;
     motor_error_t prev_error;
+
+    int open_button_blink_counter; 
+    int close_button_blink_counter;
+
 } motor_state_s;
 
 void delay_us(unsigned time_us) {
@@ -302,7 +306,8 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
       stop_motor(ms, reg);
     } else if(ms->state == STOPPED && ms->position >= CLOSED_POS_ES) {
       printf("Motor %d is already in closed position\n", ms->motor_idx);  
-      // do nothing
+      // Blink the close color LED
+      ms->close_button_blink_counter = 20;
     } else {
       printf("p_close_button was pressed first time -> Switch Motor %d on in closing direction from position %d mm\n", ms->motor_idx, ms->position);
       ms->state = CLOSING;
@@ -319,7 +324,8 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
       stop_motor(ms, reg);
     } else if(ms->state == STOPPED && ms->position <= OPEN_POS_ES) {
       printf("Motor %d is already in open position\n", ms->motor_idx);  
-      // do nothing
+      // Blink the open color LED
+      ms->open_button_blink_counter = 20;
     } else {
       printf("p_open_button was pressed first time -> Switch Motor %d on in opening direction from position %d mm\n", ms->motor_idx, ms->position);
       ms->state = OPENING;
@@ -342,6 +348,8 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
     }
     ms->position = motor_pos;
     ms->target_position = ms->position;
+    ms->open_button_blink_counter = 0;
+    ms->close_button_blink_counter = 0;
     // Check endswitches and compare with position read from flash
     check_endswitches_and_update_states(endswitches_val, ms, reg, 1);
 
@@ -445,7 +453,7 @@ void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_
 }
 
 
-void upate_pushbutton_leds(motor_state_s* ms) {
+void update_pushbutton_leds(motor_state_s* ms) {
    int led_on_mask; // set bit one where LED is on
    if(ms->state == OPENING) {
      led_on_mask = (1 << MOTOR_OPEN_BUTTON_GREEN_LED_IDX);
@@ -453,10 +461,40 @@ void upate_pushbutton_leds(motor_state_s* ms) {
      led_on_mask = (1 << MOTOR_CLOSE_BUTTON_BLUE_LED_IDX);
    } else if(ms->state == STOPPED) {
      led_on_mask = 0; // off
-   } else { // notify the user that there is some error state
+   };
+
+   // blinking overrides above
+   if(ms->open_button_blink_counter > 0) {
+      // toggle the LED
+      printf("Blink counter: 0x%x\n", ms->open_button_blink_counter);
+      if(ms->open_button_blink_counter & 1) {
+        // switch on for odd numbers
+        printf("Toggling On Open Button LED\n");
+        led_on_mask = (1 << MOTOR_OPEN_BUTTON_GREEN_LED_IDX);
+      } else {
+        led_on_mask = 0;
+      }
+      // update the time
+      ms->open_button_blink_counter -= 1;
+   }
+   if(ms->close_button_blink_counter > 0) {
+      // toggle the LED
+      if(ms->close_button_blink_counter & 1) {
+        // switch on for odd numbers
+        printf("Toggling On Close Button LED\n");
+        led_on_mask = (1 << MOTOR_CLOSE_BUTTON_BLUE_LED_IDX);
+      } else {
+        led_on_mask = 0;
+      }
+      ms->close_button_blink_counter -= 1;
+   }
+
+   // Error overrides above
+   if(ms->state == STATE_UNKNOWN) {
+     // notify the user that there is some error state
      led_on_mask = (1 << MOTOR_OPEN_BUTTON_RED_LED_IDX) | (1 << MOTOR_CLOSE_BUTTON_RED_LED_IDX);
    }
- 
+
    if(PUSHBUTTON_LED_ON == 0) {
      // invert the mask for low-active LEDs
      led_on_mask = ~led_on_mask;
@@ -477,7 +515,7 @@ void stop_motor(motor_state_s* ms, client register_if reg) {
     }
     ms->state = STOPPED;
 
-    upate_pushbutton_leds(ms);
+    update_pushbutton_leds(ms);
     update_position_regs(ms, reg);
     // register stop event
     int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
@@ -509,7 +547,7 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
   reg.set_register(base_reg, ms->state); 
   reg.set_register(base_reg+MOTOR_EVENT_REG_OFFSET, START);
   reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
-  upate_pushbutton_leds(ms);
+  update_pushbutton_leds(ms);
   update_position_regs(ms, reg);
 
   // Do the switching
@@ -787,8 +825,8 @@ void mc_control(client register_if reg) {
               led_val = 1-led_val;
               p_led <: (led_val << 3); // Green LED is on P4F3
               // Update pushbutton LEDs. Todo: move to a place where 
-              upate_pushbutton_leds(&state_m0);
-              upate_pushbutton_leds(&state_m1);
+              update_pushbutton_leds(&state_m0);
+              update_pushbutton_leds(&state_m1);
               break;
 
         }

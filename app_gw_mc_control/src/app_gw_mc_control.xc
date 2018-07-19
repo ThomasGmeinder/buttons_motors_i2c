@@ -102,11 +102,9 @@
 on MC_TILE : in port p_endswitches = XS1_PORT_4C;   // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
 //on MC_TILE : in port p_endswitches = XS1_PORT_4E;  
 
-// Todo: Move this to a 4-bit port. There are no more 1-bit ports 
 // Button to open and close the ventilations
-on MC_TILE : in port p_control_buttons = XS1_PORT_4D;  
-//on MC_TILE : in port p_control_buttons = XS1_PORT_4E;  
-
+on MC_TILE : in port p_control_buttons = XS1_PORT_4D;  // X0D16, X0D17, X0D18, X0D19
+ 
 /** Outputs **/
 // Motor 1 on/off
 on MC_TILE : out port p_m0_on = XS1_PORT_1F;  // X0D13
@@ -124,7 +122,7 @@ on MC_TILE : port p_slave_scl = XS1_PORT_1N; // X0D37 // connect to GPIO 2 on rP
 on MC_TILE : port p_led = XS1_PORT_4F;
 
 on MC_TILE : port p_m0_pushbutton_leds = XS1_PORT_4A; // X0D02, X0D03, X0D08, X0D09
-on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E;
+on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33
 
 on MC_TILE: otp_ports_t otp_ports = OTP_PORTS_INITIALIZER;
 
@@ -466,10 +464,8 @@ void update_pushbutton_leds(motor_state_s* ms) {
    // blinking overrides above
    if(ms->open_button_blink_counter > 0) {
       // toggle the LED
-      printf("Blink counter: 0x%x\n", ms->open_button_blink_counter);
       if(ms->open_button_blink_counter & 1) {
         // switch on for odd numbers
-        printf("Toggling On Open Button LED\n");
         led_on_mask = (1 << MOTOR_OPEN_BUTTON_GREEN_LED_IDX);
       } else {
         led_on_mask = 0;
@@ -481,7 +477,6 @@ void update_pushbutton_leds(motor_state_s* ms) {
       // toggle the LED
       if(ms->close_button_blink_counter & 1) {
         // switch on for odd numbers
-        printf("Toggling On Close Button LED\n");
         led_on_mask = (1 << MOTOR_CLOSE_BUTTON_BLUE_LED_IDX);
       } else {
         led_on_mask = 0;

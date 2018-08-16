@@ -42,6 +42,7 @@
 #include <stdlib.h>
 #include <i2c.h>
 #include "i2c_app.h"
+#include "common.h"
 #include <quadflashlib.h>
 #include <quadflash.h>
 #include "debug_print.h"
@@ -60,7 +61,8 @@
 #define CLOSED_POS_ES CLOSED_POS_MAX-CLOSED_TOLERANCE
 
 #define DEBOUNCE_TIME XS1_TIMER_HZ/10  // 100ms
-#define POS_UPDATE_PERIOD XS1_TIMER_HZ/10 // 100ms
+#define POS_UPDATE_PERIOD (XS1_TIMER_HZ/10) // 100ms
+#define POS_UPDATES_PER_SECOND (XS1_TIMER_HZ / POS_UPDATE_PERIOD)
 #define DEBOUNCE 1
 
 #define ES_TRIGGERED 1 // End Switch triggered. Connects between brown and blue from Pin to VCC
@@ -90,8 +92,6 @@
 
 #define MC_TILE tile[0]
 
-#define FLASH_DATA_VALID_BYTE 0x3C // arbitrary value
-#define FLASH_DATA_BYTES 4
 // Login raspiviv
 // raspiviv
 // nX9NypBk
@@ -126,53 +126,8 @@ on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0
 
 on MC_TILE: otp_ports_t otp_ports = OTP_PORTS_INITIALIZER;
 
-// Ports for QuadSPI access on explorerKIT.
-fl_QSPIPorts ports = {
-   PORT_SQI_CS,
-   PORT_SQI_SCLK,
-   PORT_SQI_SIO,
-   on tile[0]: XS1_CLKBLK_1
-};
+extern void flash_server(chanend flash_c);
 
- // List of QuadSPI devices that are supported by default.
- fl_QuadDeviceSpec deviceSpecs[] =
- {
-   FL_QUADDEVICE_SPANSION_S25FL116K,
-   FL_QUADDEVICE_SPANSION_S25FL132K,
-   FL_QUADDEVICE_SPANSION_S25FL164K,
-   FL_QUADDEVICE_ISSI_IS25LQ080B,
-   FL_QUADDEVICE_ISSI_IS25LQ016B,
-   FL_QUADDEVICE_ISSI_IS25LQ032B,
-};
-
-typedef enum {
-    OPENING,
-    CLOSING,
-    STOPPED,
-    STATE_UNKNOWN,
-    ERROR
-} motor_state_t;
-
-typedef enum {
-    I2C = 0,
-    BUTTON = 1,
-} actuator_t;
-
-// struct for motor state
-typedef struct {
-    int position; // in mm from 0 (open) to MAX_POS (closed)
-    int target_position; // the target position
-    unsigned motor_idx;
-    actuator_t actuator;
-
-    motor_state_t state;
-    motor_error_t error;
-    motor_error_t prev_error;
-
-    int open_button_blink_counter; 
-    int close_button_blink_counter;
-
-} motor_state_s;
 
 void delay_us(unsigned time_us) {
   int t;
@@ -518,19 +473,11 @@ void stop_motor(motor_state_s* ms, client register_if reg) {
     reg.set_register(base_reg+MOTOR_EVENT_REG_OFFSET, STOP);
     reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
 
+    // trigger flash write
+    ms->flash_updated = 0;
+
     printf("Stopped Motor %u at position %d mm\n", ms->motor_idx, ms->position);
 
-    unsigned char *page_buffer;
-    page_buffer = malloc(fl_getWriteScratchSize(0, 2));
-    unsigned char data[2] = {FLASH_DATA_VALID_BYTE, ms->position};
-
-    printf("Writing new motor position %d to flash for Motor %d\n", ms->position, ms->motor_idx);
-    fl_writeData(ms->motor_idx*2,
-                 2,
-                 data,
-                 page_buffer);
-
-    free(page_buffer);
 }
 
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) {
@@ -582,15 +529,19 @@ int motor_moved_by_button(motor_state_s* ms, client register_if reg) {
   return 0; 
 }
 
+// global shared memory
+motor_state_s state_m0, state_m1;
 
-void mc_control(client register_if reg) {
+void mc_control(client register_if reg, chanend flash_c) {
 
     timer tmr_pos;
     timer tmr_dbc; // debounce tiemr for p_control_buttons
     timer tmr_dbc_es;  
 
+    unsigned tmr_pos_event_counter=0;
+
     int t_dbc, t_dbc_es, t_pos;  // time variables
-    motor_state_s state_m0, state_m1;
+
     unsigned buttons_changed = 0;
     unsigned endswitches_changed = 0;
 
@@ -628,48 +579,47 @@ void mc_control(client register_if reg) {
 
 
 
-    // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
-    if(fl_connectToDevice(ports, deviceSpecs, sizeof(deviceSpecs)/sizeof(fl_QuadDeviceSpec)) != 0) {
-      printf("fl_connectToDevice Error\n");
-      return; 
-    }
-    // Read Motor positions from flash
-    char byte_buffer[FLASH_DATA_BYTES];
-    // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
-    if(fl_readData(0, FLASH_DATA_BYTES, byte_buffer) != 0) {
-      printf("fl_readData Error\n");
-      return;
-    }
-    printf("fl_readData Read %d bytes from flash:\n", FLASH_DATA_BYTES);
-    for(unsigned i=0; i<FLASH_DATA_BYTES; ++i) {
-      printf("0x%x %d\n", byte_buffer[i], byte_buffer[i]);
+    int m1_pos = -1; // invalid
+    int m0_pos = -1; // ivalid
+
+    char command = 1;
+    char result;
+    flash_c <: command;
+    flash_c :> result;
+    if(result != 0) {
+       printf("Flash access Error\n");
+    } else {
+      char byte_buffer[FLASH_DATA_BYTES];
+      for(int i=0; i<FLASH_DATA_BYTES; ++i) {
+        flash_c :> byte_buffer[i];
+      }
+      // Init Motor 0 position
+
+      if(byte_buffer[0] == FLASH_DATA_VALID_BYTE) {
+        m0_pos = byte_buffer[1];
+        printf("Found valid position for Motor 0: %d\n", m0_pos);
+      } 
+      #if !ENDSWITCHES_CONNECTED
+      else {
+        m0_pos = CLOSED_POS_ES;
+        printf("Endswitches not connected. Initialising Motor 0 to arbitrary position %d\n", m0_pos);
+      }
+      #endif
+    
+      // Init Motor 1 position
+      if(byte_buffer[2] == FLASH_DATA_VALID_BYTE) {
+        m1_pos = byte_buffer[3];
+        printf("Found valid position for Motor 1: %d\n", m1_pos);
+      } 
+      #if !ENDSWITCHES_CONNECTED
+      else {
+        m1_pos = CLOSED_POS_ES;
+        printf("Endswitches not connected. Initialising Motor 1 to arbitrary position %d\n", m1_pos);
+      }
+      #endif
     }
 
-    // Init Motor 0 position
-    int m0_pos = -1; // ivalid
-    if(byte_buffer[0] == FLASH_DATA_VALID_BYTE) {
-      m0_pos = byte_buffer[1];
-      printf("Found valid position for Motor 0: %d\n", m0_pos);
-    } 
-    #if !ENDSWITCHES_CONNECTED
-    else {
-      m0_pos = CLOSED_POS_ES;
-      printf("Endswitches not connected. Initialising Motor 0 to arbitrary position %d\n", m0_pos);
-    }
-    #endif
-    
-    // Init Motor 1 position
-    int m1_pos = -1; // invalid
-    if(byte_buffer[2] == FLASH_DATA_VALID_BYTE) {
-      m1_pos = byte_buffer[3];
-      printf("Found valid position for Motor 1: %d\n", m1_pos);
-    } 
-    #if !ENDSWITCHES_CONNECTED
-    else {
-      m1_pos = CLOSED_POS_ES;
-      printf("Endswitches not connected. Initialising Motor 1 to arbitrary position %d\n", m1_pos);
-    }
-    #endif
+ 
 
 
     // Is this needed??
@@ -797,8 +747,15 @@ void mc_control(client register_if reg) {
                   }
                   printf("Updated position estimate to %d mm\n", state_m0.position);
                   update_position_regs(&state_m0, reg);
-
                   check_and_handle_new_pos(&state_m0, reg);
+
+                  // Update motor position in flash every second
+                  // To limit the number of flash writes
+                  if(tmr_pos_event_counter % POS_UPDATES_PER_SECOND == 0) {
+                     //printf("%d", (tmr_pos_event_counter % POS_UPDATES_PER_SECOND));
+                     //printf("One second elapsed after %d position updates per second, %d\n", POS_UPDATES_PER_SECOND, tmr_pos_event_counter);
+                     state_m0.flash_updated = 0;
+                  }
               }; 
               if(state_m1.state == OPENING || state_m1.state == CLOSING) {
                   if(state_m1.state == OPENING) {
@@ -808,12 +765,16 @@ void mc_control(client register_if reg) {
                     state_m1.position += pos_change;
                     printf("Motor 2 is closing. ");
                   }
-                 printf("Updated position estimate to %d mm\n", state_m1.position);
+                  printf("Updated position estimate to %d mm\n", state_m1.position);
                   update_position_regs(&state_m1, reg);
-
                   check_and_handle_new_pos(&state_m1, reg);
+
+                  if(tmr_pos_event_counter % POS_UPDATES_PER_SECOND ==0) {
+                     //       printf("%d", (tmr_pos_event_counter % POS_UPDATES_PER_SECOND));
+                     //printf("One second elapsed after %d position updates per second, %d\n", POS_UPDATES_PER_SECOND, tmr_pos_event_counter);
+                     state_m1.flash_updated = 0;
+                  }
               }; 
-              //Todo: if(pos_out_of_range(state_m1.position)) {
 
               // Use this timer event to update LEDs
               // toggle LED for activity detection
@@ -822,6 +783,8 @@ void mc_control(client register_if reg) {
               // Update pushbutton LEDs. Todo: move to a place where 
               update_pushbutton_leds(&state_m0);
               update_pushbutton_leds(&state_m1);
+
+              tmr_pos_event_counter+=1;
               break;
 
         }
@@ -843,12 +806,13 @@ void i2c_control(server register_if i_reg) {
 int main() {
 
   register_if i_reg;
- 
+  chan flash_c;
   //debug_printf("Starting I2C enabled Motoro Controller\n");
 
     par {
       on MC_TILE : i2c_control(i_reg);
-      on MC_TILE : mc_control(i_reg);
+      on MC_TILE : mc_control(i_reg, flash_c);
+      on MC_TILE : flash_server(flash_c);
     }
     return 0;
 }

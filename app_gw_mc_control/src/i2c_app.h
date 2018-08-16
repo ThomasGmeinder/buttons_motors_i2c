@@ -8,20 +8,19 @@ typedef enum {
     R   // Read only from I2C
 } reg_access_t;
 
-typedef enum {
-    NO_EVENT = 0,
-    START,
-    STOP,
-} motor_event_t;
+#define NUM_REGS_PER_MOTOR 6
+#define NUM_MOTORS 2
+#define NUM_MOTOR_REGISTERS (NUM_REGS_PER_MOTOR * NUM_MOTORS)
+#define NUM_REGISTERS NUM_MOTOR_REGISTERS+2 // +2 System Registers
 
-// Todo: Maybe separate SPEED_TOO_SLOW and SPEED_TOO_FAST into a warning register
-typedef enum {
-    NO_ERROR,
-    POSITION_UNKNOWN,
-    BOTH_ENDSWITCHES_ON,
-    SPEED_TOO_SLOW, 
-    SPEED_TOO_FAST,     
-} motor_error_t;
+#define MOTOR_STATE_REG_OFFSET 0
+#define MOTOR_TARGET_POS_REG_OFFSET 1
+#define MOTOR_CURRENT_POS_REG_OFFSET 2
+#define MOTOR_ACTUATOR_REG_OFFSET 3
+#define MOTOR_EVENT_REG_OFFSET 4
+#define MOTOR_ERROR_REG_OFFSET 5
+#define SYSTEM_ID_REG_OFFSET NUM_MOTOR_REGISTERS 
+
 
 /*
  * Interface definition between user application and I2C slave register file
@@ -47,19 +46,6 @@ typedef interface register_if {
   [[notification]]
   slave void register_changed();
 } register_if;
-
-#define NUM_REGS_PER_MOTOR 6
-#define NUM_MOTORS 2
-#define NUM_MOTOR_REGISTERS (NUM_REGS_PER_MOTOR * NUM_MOTORS)
-#define NUM_REGISTERS NUM_MOTOR_REGISTERS+2 // +2 System Registers
-
-#define MOTOR_STATE_REG_OFFSET 0
-#define MOTOR_TARGET_POS_REG_OFFSET 1
-#define MOTOR_CURRENT_POS_REG_OFFSET 2
-#define MOTOR_ACTUATOR_REG_OFFSET 3
-#define MOTOR_EVENT_REG_OFFSET 4
-#define MOTOR_ERROR_REG_OFFSET 5
-#define SYSTEM_ID_REG_OFFSET NUM_MOTOR_REGISTERS 
 
 [[distributable]]
 void i2c_slave_register_file(server i2c_slave_callback_if i2c, server register_if app);

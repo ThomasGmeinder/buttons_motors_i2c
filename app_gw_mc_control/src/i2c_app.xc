@@ -5,6 +5,7 @@
 #include "i2c.h"
 #include "debug_print.h"
 #include "i2c_app.h"
+#include "common.h"
 
 // Todo: Add Error type and value register for each motor
 // Errors: UNKNOWN_POSITION, SPEED_ESTIMATION, 

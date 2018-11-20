@@ -15,7 +15,7 @@ void write_motor_position_to_flash(motor_state_s* ms) {
     page_buffer = malloc(fl_getWriteScratchSize(0, 2));
     unsigned char data[2] = {FLASH_DATA_VALID_BYTE, ms->position};
 
-    printf("Writing new motor position %d to flash for Motor %d\n", ms->position, ms->motor_idx);
+    printf("!!!!!! Writing new motor position %d to flash for Motor %d\n", ms->position, ms->motor_idx);
     fl_writeData(ms->motor_idx*2,
               2,
               data,
@@ -24,16 +24,16 @@ void write_motor_position_to_flash(motor_state_s* ms) {
     free(page_buffer);
 
     // set flag
-    ms->flash_updated = 1;
+    ms->update_flash = 0;
 
 }
 
 
 void handle_flash_write() {
-	if(!state_m0.flash_updated) {
+	if(state_m0.update_flash) {
        write_motor_position_to_flash(&state_m0);
     }	
-    if(!state_m1.flash_updated) {
+    if(state_m1.update_flash) {
        write_motor_position_to_flash(&state_m1);
     }
 }

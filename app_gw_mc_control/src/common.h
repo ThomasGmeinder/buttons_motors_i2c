@@ -44,7 +44,7 @@ typedef struct {
     int open_button_blink_counter; 
     int close_button_blink_counter;
 
-    unsigned flash_updated;
+    unsigned update_flash; // shared memory flag to trigger flash write
 
 } motor_state_s;
 

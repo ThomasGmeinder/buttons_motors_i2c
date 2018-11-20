@@ -474,7 +474,7 @@ void stop_motor(motor_state_s* ms, client register_if reg) {
     reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
 
     // trigger flash write
-    ms->flash_updated = 0;
+    ms->update_flash = 1;
 
     printf("Stopped Motor %u at position %d mm\n", ms->motor_idx, ms->position);
 
@@ -547,6 +547,8 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     unsigned prev_control_buttons_val, prev_endswitches_val;
     unsigned led_val = 0;
+
+    const unsigned flash_update_divider = (CLOSED_POS_ES-OPEN_POS_ES) / FLASH_UPDATES_PER_DISTANCE;
 
     char mac_address[6];
     // Read MAC address:
@@ -749,13 +751,10 @@ void mc_control(client register_if reg, chanend flash_c) {
                   update_position_regs(&state_m0, reg);
                   check_and_handle_new_pos(&state_m0, reg);
 
-                  // Update motor position in flash every second
-                  // To limit the number of flash writes
-                  if(tmr_pos_event_counter % POS_UPDATES_PER_SECOND == 0) {
-                     //printf("%d", (tmr_pos_event_counter % POS_UPDATES_PER_SECOND));
-                     //printf("One second elapsed after %d position updates per second, %d\n", POS_UPDATES_PER_SECOND, tmr_pos_event_counter);
-                     state_m0.flash_updated = 0;
+                  if(state_m0.position % flash_update_divider == 0) {
+                     state_m0.update_flash = 1;
                   }
+
               }; 
               if(state_m1.state == OPENING || state_m1.state == CLOSING) {
                   if(state_m1.state == OPENING) {
@@ -769,10 +768,8 @@ void mc_control(client register_if reg, chanend flash_c) {
                   update_position_regs(&state_m1, reg);
                   check_and_handle_new_pos(&state_m1, reg);
 
-                  if(tmr_pos_event_counter % POS_UPDATES_PER_SECOND ==0) {
-                     //       printf("%d", (tmr_pos_event_counter % POS_UPDATES_PER_SECOND));
-                     //printf("One second elapsed after %d position updates per second, %d\n", POS_UPDATES_PER_SECOND, tmr_pos_event_counter);
-                     state_m1.flash_updated = 0;
+                  if(state_m1.position % flash_update_divider == 0) {
+                     state_m1.update_flash = 1;
                   }
               }; 
 

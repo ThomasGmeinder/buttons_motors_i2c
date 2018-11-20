@@ -48,18 +48,18 @@ void flash_server(chanend flash_c) {
                  printf("fl_readData Error\n");
                  error = 2;
                }
-               if(error) {
-               	 flash_c <: error;
-               } else {
-               	 flash_c <: (char) 0; // OK
+               flash_c <: error;
+
+               if(!error) {
                  printf("fl_readData Read %d bytes from flash:\n", FLASH_DATA_BYTES);
                  for(unsigned i=0; i<FLASH_DATA_BYTES; ++i) {
                    printf("0x%x %d\n", byte_buffer[i], byte_buffer[i]);
                    flash_c <: byte_buffer[i];
                  }
                }
+               error = 0; // reset error
                break;
-             default:
+            default:
                handle_flash_write();
                break;
            

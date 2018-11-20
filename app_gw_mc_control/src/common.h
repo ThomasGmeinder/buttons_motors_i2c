@@ -14,13 +14,13 @@ typedef enum {
     BUTTON = 1,
 } actuator_t;
 
-// Todo: Maybe separate SPEED_TOO_SLOW and SPEED_TOO_FAST into a warning register
+// Todo: Maybe separate MOTOR_TOO_SLOW and MOTOR_TOO_FAST into a warning register
 typedef enum {
     NO_ERROR,
     POSITION_UNKNOWN,
     BOTH_ENDSWITCHES_ON,
-    SPEED_TOO_SLOW, 
-    SPEED_TOO_FAST,     
+    MOTOR_TOO_SLOW, 
+    MOTOR_TOO_FAST,     
 } motor_error_t;
 
 typedef enum {

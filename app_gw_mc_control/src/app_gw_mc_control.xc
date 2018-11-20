@@ -5,7 +5,7 @@
  *      Author: thomas
  */
 
-// Control Specification
+/********** Control Specification ****************/
 // Inputs and actions
 // - User presses open button whilst motors stopped. A: start_motor OPENING with target position OPEN_POS_ES
 // - User presses open button again whilst motors run. A: stop_motor
@@ -15,8 +15,23 @@
 // - Web server sends open command with a new target position. A: start_motor OPENING with target position X
 // Note: When a I2C command comes in from the server whilst the motor is running, then ignore it
 
-// User Guide:
+/************* Flash firmware ********************/
 // Flash with 8k Datapartition: xflash bin/app_gw_mc_control.xe --boot-partition-size 516096
+
+/************* Test Protocol *********************/
+// Switch both Endswitches on: 
+//   BOTH_ENDSWITCHES_ON is correctly flagged via I2C and displayed in Browser
+//   Both Buttons light up red
+//   The error is correctly cleared when one of the Endswitches is switched off.
+// When flash is empty (no known position) and no Endswitch is triggered:
+//   POSITION_UNKNOWN error is correctly flagged via I2C and displayed in the Browser
+//   Both Buttons light up red
+//   The error is correctly cleared when one of the Endswitches is switched on. Works with multiple errors!
+// Open/close ventilation with buttons and no Endswitches: MOTOR_TOO_SLOW error is correctly reported.
+// Trigger Open Endswitch whilst Motor is Opening: MOTOR_TOO_FAST error is correctly reported
+// Trigger Open Endswitch whilst Motor is Closing: POSITION_UNKNOWN error is correctly reported. Can be cleeared by triggering Endswitch again.
+// Trigger Closed Endswitch whilst Motor is Opening: POSITION_UNKNOWN error is correctly reported. Can be cleeared by triggering Endswitch again.
+// Trigger Closed Endswitch whilst Motor is Closing: MOTOR_TOO_FAST error is correctly reported
 
 // Todo:
 // Change relais control signals to active low. Relais inputs are pulled high on he releais so default (high) should mean off
@@ -48,7 +63,7 @@
 #include "debug_print.h"
 #include "otp_board_info.h"
 
-#define ENDSWITCHES_CONNECTED 0
+#define ENDSWITCHES_CONNECTED 1
 
 #define MOTOR_SPEED 100 // in mm/s
 #define OPEN_POS_MIN 0 // min position in cm
@@ -60,10 +75,10 @@
 #define CLOSED_TOLERANCE 2 
 #define CLOSED_POS_ES CLOSED_POS_MAX-CLOSED_TOLERANCE
 
+#define DEBOUNCE 1
 #define DEBOUNCE_TIME XS1_TIMER_HZ/10  // 100ms
 #define POS_UPDATE_PERIOD (XS1_TIMER_HZ/10) // 100ms
-#define POS_UPDATES_PER_SECOND (XS1_TIMER_HZ / POS_UPDATE_PERIOD)
-#define DEBOUNCE 1
+#define FLASH_UPDATES_PER_DISTANCE 10
 
 #define ES_TRIGGERED 1 // End Switch triggered. Connects between brown and blue from Pin to VCC
 #define BUTTON_PRESSED 1 // Button pressed. 
@@ -138,7 +153,7 @@ void delay_us(unsigned time_us) {
 
 // protos
 void stop_motor(motor_state_s* ms, client register_if reg);
-void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position);
+void check_motor_state_after_endswitch_triggered(motor_state_s* ms, int actual_position);
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator);
 
 // Functions
@@ -201,11 +216,11 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
      ms->error = BOTH_ENDSWITCHES_ON;
      printf("Fatal Error: Both Endswitches on Motor %d triggered at the same time\n", ms->motor_idx);
      update_error = 1;
-     // todo: store and report Error
+     // Todo: store and report Error
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN)) {
      printf("Motor %d open endswitch triggered\n", ms->motor_idx);
      ms->error = NO_ERROR;
-     check_motor_state_after_endswitch_triggered(ms, OPENING, OPEN_POS_ES);
+     check_motor_state_after_endswitch_triggered(ms, OPEN_POS_ES);
 
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
@@ -216,7 +231,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
      printf("Motor %d closed endswitch triggered\n", ms->motor_idx);
      ms->error = NO_ERROR; // can be overridden!
-     check_motor_state_after_endswitch_triggered(ms, CLOSING, CLOSED_POS_ES);
+     check_motor_state_after_endswitch_triggered(ms, CLOSED_POS_ES);
 
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
@@ -303,6 +318,7 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
     ms->target_position = ms->position;
     ms->open_button_blink_counter = 0;
     ms->close_button_blink_counter = 0;
+    ms->update_flash = 0;
     // Check endswitches and compare with position read from flash
     check_endswitches_and_update_states(endswitches_val, ms, reg, 1);
 
@@ -322,7 +338,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
          if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
            printf("Closing ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, CLOSED_TOLERANCE);
            stop_motor(ms, reg);
-           ms->error = SPEED_TOO_SLOW;
+           ms->error = MOTOR_TOO_SLOW;
            update_error_state(ms, reg);
          }
        } else { 
@@ -345,7 +361,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
          if(ms->position <= ms->target_position - OPEN_TOLERANCE) {
            printf("Opening ventilation %d exceeded target position %d by %d cm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, OPEN_TOLERANCE);
            stop_motor(ms, reg);
-           ms->error = SPEED_TOO_SLOW;
+           ms->error = MOTOR_TOO_SLOW;
            update_error_state(ms, reg);
          } 
        } else {
@@ -383,25 +399,42 @@ void init_regs(motor_state_s* ms, client register_if reg) {
   }
 }
 
-void check_motor_state_after_endswitch_triggered(motor_state_s* ms, motor_state_t state, int actual_position) {
+void check_motor_state_after_endswitch_triggered(motor_state_s* ms, int actual_position) {
   // Todo: Check OPEN_TOLERANCE, CLOSED_TOLERANCE, motor state
+
+  // check the actual_position as per the triggered Endswitch against the computed motor position
+  // Cases:
+  // actual_position is from the wrong Endswich -> Fatal Error -> Set POSITION_UNKNOWN
+  // actual_position is ahead of ms->position: Actual motor speed faster than estimate
+  // ms->position is ahead of actual_position: Actual motor speed slower than estimate
+
   if(ms->state == OPENING) {
-    if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
+    if(actual_position == CLOSED_POS_ES) {
+      printf("Fatal Error. ENDSWITCH_CLOSED triggered when Motor %d is OPENING\n", ms->motor_idx);
+      ms->error = POSITION_UNKNOWN;
+    } 
+    else if(actual_position - ms->position > OPEN_TOLERANCE) {
        printf("OPENING speed slower than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
-       ms->error = SPEED_TOO_SLOW; // Motor slower than estimation
-    } else if(OPEN_POS_ES - ms->position > OPEN_TOLERANCE) {
+       ms->error = MOTOR_TOO_SLOW; // Motor slower than estimation
+    } 
+    else if(ms->position - actual_position > OPEN_TOLERANCE) {
        printf("OPENING speed faster than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
-       ms->error = SPEED_TOO_FAST; // Motor faster than estimation
+       ms->error = MOTOR_TOO_FAST; // Motor faster than estimation
     }
   }
   if(ms->state == CLOSING) {
-    if(ms->position - CLOSED_POS_ES > OPEN_TOLERANCE) {
+    if(actual_position == OPEN_POS_ES) {
+      printf("Fatal Error. ENDSWITCH_OPEN triggered when Motor %d is CLOSING\n", ms->motor_idx);
+      ms->error = POSITION_UNKNOWN;
+    } 
+    else if(actual_position - ms->position > CLOSED_TOLERANCE) {
        printf("CLOSING speed faster than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
-       ms->error = SPEED_TOO_FAST; // Motor slower than estimation
-    } else if(CLOSED_POS_ES - ms->position > OPEN_TOLERANCE) {
-       printf("CLOSING speed slower than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
-       ms->error = SPEED_TOO_SLOW; // Motor slower than estimation
+       ms->error = MOTOR_TOO_FAST; // Motor slower than estimation
     }   
+    else if(ms->position - actual_position > CLOSED_TOLERANCE) {
+      printf("CLOSING speed slower than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
+       ms->error = MOTOR_TOO_SLOW; // Motor slower than estimation
+    } 
   } 
 }
 
@@ -621,8 +654,6 @@ void mc_control(client register_if reg, chanend flash_c) {
       #endif
     }
 
- 
-
 
     // Is this needed??
     p_control_buttons :> prev_control_buttons_val;
@@ -777,7 +808,7 @@ void mc_control(client register_if reg, chanend flash_c) {
               // toggle LED for activity detection
               led_val = 1-led_val;
               p_led <: (led_val << 3); // Green LED is on P4F3
-              // Update pushbutton LEDs. Todo: move to a place where 
+              // Update pushbutton LEDs. 
               update_pushbutton_leds(&state_m0);
               update_pushbutton_leds(&state_m1);
 

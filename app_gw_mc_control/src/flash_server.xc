@@ -38,7 +38,7 @@ void flash_server(chanend flash_c) {
     }
 
     while(1) {
-        char flash_command;
+      char flash_command;
     	select {
     		case flash_c :> flash_command:
     		   // Read Motor positions from flash

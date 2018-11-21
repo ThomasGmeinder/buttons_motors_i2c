@@ -624,6 +624,7 @@ void mc_control(client register_if reg, chanend flash_c) {
     if(result != 0) {
        printf("Flash access Error\n");
     } else {
+      // get the data
       char byte_buffer[FLASH_DATA_BYTES];
       for(int i=0; i<FLASH_DATA_BYTES; ++i) {
         flash_c :> byte_buffer[i];
@@ -631,7 +632,7 @@ void mc_control(client register_if reg, chanend flash_c) {
       // Init Motor 0 position
 
       if(byte_buffer[0] == FLASH_DATA_VALID_BYTE) {
-        m0_pos = byte_buffer[1];
+        memcpy(&m0_pos, &byte_buffer[1], sizeof(int));
         printf("Found valid position for Motor 0: %d\n", m0_pos);
       } 
       #if !ENDSWITCHES_CONNECTED
@@ -642,8 +643,8 @@ void mc_control(client register_if reg, chanend flash_c) {
       #endif
     
       // Init Motor 1 position
-      if(byte_buffer[2] == FLASH_DATA_VALID_BYTE) {
-        m1_pos = byte_buffer[3];
+      if(byte_buffer[MOTOR_FLASH_AREA_SIZE] == FLASH_DATA_VALID_BYTE) {
+        memcpy(&m1_pos, &byte_buffer[MOTOR_FLASH_AREA_SIZE+1], sizeof(int));
         printf("Found valid position for Motor 1: %d\n", m1_pos);
       } 
       #if !ENDSWITCHES_CONNECTED

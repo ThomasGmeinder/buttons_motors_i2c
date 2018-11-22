@@ -9,8 +9,6 @@
 // shared memory
 extern motor_state_s state_m0, state_m1;
 
-#define MOTOR_FLASH_AREA_SIZE 6
-
 void write_motor_position_to_flash(motor_state_s* ms) {   
 
     unsigned char *page_buffer;
@@ -19,7 +17,7 @@ void write_motor_position_to_flash(motor_state_s* ms) {
     data[0] = FLASH_DATA_VALID_BYTE;
     memcpy(&data[1], &(ms->position), sizeof(int));
 
-    printf("!!!!!! Writing new motor position %d to flash for Motor %d\n", ms->position, ms->motor_idx);
+    printf("!!!!!! Writing new motor position %d mm to flash for Motor %d\n", ms->position, ms->motor_idx);
     fl_writeData(ms->motor_idx*MOTOR_FLASH_AREA_SIZE,
               MOTOR_FLASH_AREA_SIZE,
               data,

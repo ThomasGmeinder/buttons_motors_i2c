@@ -34,6 +34,7 @@
 // Trigger Closed Endswitch whilst Motor is Closing: MOTOR_TOO_FAST error is correctly reported
 
 // Todo:
+// Try to make sure that target_mp is always reached. Then the tolerances on the server can be set to 0.
 // Change relais control signals to active low. Relais inputs are pulled high on he releais so default (high) should mean off
 // Review duplicated state in motor_state_s and I2C registers.
 // Write a spec for updates of the states based on the actions above
@@ -73,14 +74,17 @@
 #define OPEN_POS_ES OPEN_POS_MIN  // Open position at Endswitch
 #define CLOSED_POS_ES CLOSED_POS_MAX
 
+#define DISTANCE_BETWEEN_ES = CLOSED_POS_ES-OPEN_POS_ES
+
 #define OPEN_TOLERANCE 10   // 10 mm tolerance
 #define CLOSED_TOLERANCE 10 
 
 #define DEBOUNCE 1
 #define DEBOUNCE_TIME XS1_TIMER_HZ/10  // 100ms
-#define POS_UPDATE_PERIOD (XS1_TIMER_HZ) // 1s
+#define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ) // update every second
 #define LED_CYCLES (XS1_TIMER_HZ/10) // 100ms
-#define FLASH_UPDATES_PER_DISTANCE 10
+
+#define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES
 
 #define ES_TRIGGERED 1 // End Switch triggered. Connects between brown and blue from Pin to VCC
 #define BUTTON_PRESSED 1 // Button pressed. 
@@ -305,7 +309,7 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
   }
 }
 
-void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, unsigned endswitches_val, unsigned motor_idx) {
+void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, unsigned endswitches_val, unsigned motor_idx, int t) {
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
     ms->prev_error = NO_ERROR;
@@ -321,6 +325,7 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
     ms->open_button_blink_counter = 0;
     ms->close_button_blink_counter = 0;
     ms->update_flash = 0;
+    ms->time_of_last_flash_update = t;
     // Check endswitches and compare with position read from flash
     check_endswitches_and_update_states(endswitches_val, ms, reg, 1);
 
@@ -582,8 +587,6 @@ void mc_control(client register_if reg, chanend flash_c) {
     unsigned prev_control_buttons_val, prev_endswitches_val;
     unsigned led_val = 0;
 
-    const unsigned flash_update_divider = (CLOSED_POS_ES-OPEN_POS_ES) / FLASH_UPDATES_PER_DISTANCE;
-
     char mac_address[6];
     // Read MAC address:
     otp_board_info_get_mac(otp_ports, 0, mac_address);
@@ -664,14 +667,14 @@ void mc_control(client register_if reg, chanend flash_c) {
     unsigned endswitches_m0 = prev_endswitches_val & 0b11;
     unsigned endswitches_m1 = (prev_endswitches_val >> 2) & 0b11;
 
-    init_motor_state(&state_m0, reg, m0_pos, endswitches_m0, 0);
-    init_regs(&state_m0, reg);
-    init_motor_state(&state_m1, reg, m1_pos, endswitches_m1, 1);
-    init_regs(&state_m1, reg);
-
     // Init!!
     tmr_pos :> t_pos;  // init position update time
     tmr_led :> t_led;
+
+    init_motor_state(&state_m0, reg, m0_pos, endswitches_m0, 0, t_pos);
+    init_regs(&state_m0, reg);
+    init_motor_state(&state_m1, reg, m1_pos, endswitches_m1, 1, t_pos);
+    init_regs(&state_m1, reg);
 
     while(1) {
         // input from all input ports and store in prev values
@@ -770,9 +773,9 @@ void mc_control(client register_if reg, chanend flash_c) {
               break;
 
             // Position estimation
-            case tmr_pos when timerafter(t_pos+POS_UPDATE_PERIOD) :> t_pos:
-              // divide by 10 because motor speed is in mm/s
-              unsigned pos_change =  (unsigned long long) MOTOR_SPEED * POS_UPDATE_PERIOD / (XS1_TIMER_HZ); 
+            case tmr_pos when timerafter(t_pos+POS_UPDATE_PERIOD_CYCLES) :> t_pos:
+              // position change per update period in mm
+              const unsigned pos_change =  (unsigned long long) MOTOR_SPEED * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
               
               if(state_m0.state == OPENING || state_m0.state == CLOSING) {
                   if(state_m0.state == OPENING) {
@@ -786,8 +789,9 @@ void mc_control(client register_if reg, chanend flash_c) {
                   update_position_regs(&state_m0, reg);
                   check_and_handle_new_pos(&state_m0, reg);
 
-                  if(state_m0.position % flash_update_divider == 0) {
+                  if(t_pos - state_m0.time_of_last_flash_update >= FLASH_UPDATE_PERIOD_CYCLES) {
                      state_m0.update_flash = 1;
+                     state_m0.time_of_last_flash_update = t_pos;
                   }
 
               }; 
@@ -803,8 +807,9 @@ void mc_control(client register_if reg, chanend flash_c) {
                   update_position_regs(&state_m1, reg);
                   check_and_handle_new_pos(&state_m1, reg);
 
-                  if(state_m1.position % flash_update_divider == 0) {
+                  if(t_pos - state_m1.time_of_last_flash_update >= FLASH_UPDATE_PERIOD_CYCLES) {
                      state_m1.update_flash = 1;
+                     state_m1.time_of_last_flash_update = t_pos;
                   }
               }; 
 

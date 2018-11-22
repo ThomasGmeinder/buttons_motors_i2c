@@ -44,12 +44,13 @@ typedef struct {
     int open_button_blink_counter; 
     int close_button_blink_counter;
 
+    int time_of_last_flash_update;
     unsigned update_flash; // shared memory flag to trigger flash write
 
 } motor_state_s;
 
 #define FLASH_DATA_VALID_BYTE 0x3C // arbitrary value
-#define MOTOR_FLASH_AREA_SIZE 6 // one byte marker, 4 bytes position
+#define MOTOR_FLASH_AREA_SIZE 5 // one byte marker, 4 bytes position
 #define FLASH_DATA_BYTES MOTOR_FLASH_AREA_SIZE*2
 
 #endif

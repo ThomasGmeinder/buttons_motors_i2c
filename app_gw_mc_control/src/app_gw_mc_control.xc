@@ -67,24 +67,25 @@
 
 #define ENDSWITCHES_CONNECTED 0
 
-#define MOTOR_SPEED 15 // in mm/s
-#define OPEN_POS_MIN 0 // min position in mm
-#define CLOSED_POS_MAX 1200  // max position in mm
+// Note: Positions are calculated in micrometers so that integer speed can be tuned better.
+#define MOTOR_SPEED 15000 // in um/s
+#define OPEN_POS_MIN MM_to_UM(0) // min position 
+#define CLOSED_POS_MAX MM_to_UM(1200)  // max position in um
 
 #define OPEN_POS_ES OPEN_POS_MIN  // Open position at Endswitch
 #define CLOSED_POS_ES CLOSED_POS_MAX
 
 #define DISTANCE_BETWEEN_ES = CLOSED_POS_ES-OPEN_POS_ES
 
-#define OPEN_TOLERANCE 10   // 10 mm tolerance
-#define CLOSED_TOLERANCE 10 
+#define OPEN_TOLERANCE MM_to_UM(10)   // 10 mm tolerance
+#define CLOSED_TOLERANCE MM_to_UM(10) 
 
 #define DEBOUNCE 1
 #define DEBOUNCE_TIME XS1_TIMER_HZ/10  // 100ms
-#define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ) // update every second
-#define LED_CYCLES (XS1_TIMER_HZ/10) // 100ms
+#define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
+#define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES*20 // Update flash every 2 seconds
 
-#define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES
+#define LED_CYCLES (XS1_TIMER_HZ/10) // 100ms
 
 #define ES_TRIGGERED 1 // End Switch triggered. Connects between brown and blue from Pin to VCC
 #define BUTTON_PRESSED 1 // Button pressed. 
@@ -283,7 +284,7 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
       // Blink the close color LED
       ms->close_button_blink_counter = 20;
     } else {
-      printf("p_close_button was pressed first time -> Switch Motor %d on in closing direction from position %d mm\n", ms->motor_idx, ms->position);
+      printf("p_close_button was pressed first time -> Switch Motor %d on in closing direction from position %d mm\n", ms->motor_idx, UM_to_MM(ms->position));
       ms->state = CLOSING;
       ms->target_position = CLOSED_POS_ES;
       start_motor(ms, reg, BUTTON);
@@ -301,7 +302,7 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
       // Blink the open color LED
       ms->open_button_blink_counter = 20;
     } else {
-      printf("p_open_button was pressed first time -> Switch Motor %d on in opening direction from position %d mm\n", ms->motor_idx, ms->position);
+      printf("p_open_button was pressed first time -> Switch Motor %d on in opening direction from position %d mm\n", ms->motor_idx, UM_to_MM(ms->position));
       ms->state = OPENING;
       ms->target_position = OPEN_POS_ES;
       start_motor(ms, reg, BUTTON);
@@ -343,20 +344,20 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
        if(ms->target_position >= CLOSED_POS_ES) { // Target position is at Closed Endswitch
          // Endswitch should stop the motor. Double heck here based on  
          if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
-           printf("Closing ventilation %d exceeded target position %d by %d mm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, CLOSED_TOLERANCE);
+           printf("Closing ventilation %d exceeded target position %d by %d mm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, UM_to_MM(ms->target_position), CLOSED_TOLERANCE);
            stop_motor(ms, reg);
            ms->error = MOTOR_TOO_SLOW;
            update_error_state(ms, reg);
          }
        } else { 
          if(ms->position >= ms->target_position) {
-           printf("Closing ventilation %d is >= target position %d mm\n", ms->motor_idx, ms->target_position);
+           printf("Closing ventilation %d is >= target position %d mm\n", ms->motor_idx, UM_to_MM(ms->target_position));
            stop_motor(ms, reg);
          }   
        }
     #else
        if(ms->position >= ms->target_position) {
-         printf("Closing ventilation %d is >= target position %d mm\n", ms->motor_idx, ms->target_position);
+         printf("Closing ventilation %d is >= target position %d mm\n", ms->motor_idx, UM_to_MM(ms->target_position));
          stop_motor(ms, reg);
        }         
     #endif 
@@ -366,20 +367,20 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
      #if ENDSWITCHES_CONNECTED
        if(ms->target_position <= OPEN_POS_ES) { // Target position is at Open Endswitch, 
          if(ms->position <= ms->target_position - OPEN_TOLERANCE) {
-           printf("Opening ventilation %d exceeded target position %d by %d mm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, ms->target_position, OPEN_TOLERANCE);
+           printf("Opening ventilation %d exceeded target position %d by %d mm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, UM_to_MM(ms->target_position), OPEN_TOLERANCE);
            stop_motor(ms, reg);
            ms->error = MOTOR_TOO_SLOW;
            update_error_state(ms, reg);
          } 
        } else {
          if(ms->position <= ms->target_position) {
-           printf("Opening ventilation %d is <= target position %d mm\n", ms->motor_idx, ms->target_position);
+           printf("Opening ventilation %d is <= target position %d mm\n", ms->motor_idx, UM_to_MM(ms->target_position));
            stop_motor(ms, reg);
          }  
        }
     #else
        if(ms->position <= ms->target_position) {
-         printf("Opening ventilation %d is <= target position %d mm\n", ms->motor_idx, ms->target_position);
+         printf("Opening ventilation %d is <= target position %d mm\n", ms->motor_idx, UM_to_MM(ms->target_position));
          stop_motor(ms, reg);
        }     
     #endif
@@ -390,8 +391,8 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
 void update_position_regs(motor_state_s* ms, client register_if reg) {
   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
   // Causes server control to take over after I2C control: 
-  reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  ms->target_position/10);
-  reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, ms->position/10);
+  reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  UM_to_CM(ms->target_position));
+  reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, UM_to_CM(ms->position));
 }
 
 void init_regs(motor_state_s* ms, client register_if reg) {
@@ -401,8 +402,8 @@ void init_regs(motor_state_s* ms, client register_if reg) {
   reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
 
   if(ms->error == NO_ERROR) { // Only init if there was no error
-    reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  ms->target_position/10);
-    reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, ms->position/10);
+    reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  UM_to_CM(ms->target_position));
+    reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, UM_to_CM(ms->position));
   }
 }
 
@@ -421,11 +422,11 @@ void check_motor_state_after_endswitch_triggered(motor_state_s* ms, int actual_p
       ms->error = POSITION_UNKNOWN;
     } 
     else if(actual_position - ms->position > OPEN_TOLERANCE) {
-       printf("OPENING speed slower than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
+       printf("OPENING speed slower than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
        ms->error = MOTOR_TOO_SLOW; // Motor slower than estimation
     } 
     else if(ms->position - actual_position > OPEN_TOLERANCE) {
-       printf("OPENING speed faster than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", ms->position, OPEN_POS_ES);
+       printf("OPENING speed faster than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
        ms->error = MOTOR_TOO_FAST; // Motor faster than estimation
     }
   }
@@ -435,11 +436,11 @@ void check_motor_state_after_endswitch_triggered(motor_state_s* ms, int actual_p
       ms->error = POSITION_UNKNOWN;
     } 
     else if(actual_position - ms->position > CLOSED_TOLERANCE) {
-       printf("CLOSING speed faster than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
+       printf("CLOSING speed faster than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
        ms->error = MOTOR_TOO_FAST; // Motor slower than estimation
     }   
     else if(ms->position - actual_position > CLOSED_TOLERANCE) {
-      printf("CLOSING speed slower than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", ms->position, CLOSED_POS_ES);
+      printf("CLOSING speed slower than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
        ms->error = MOTOR_TOO_SLOW; // Motor slower than estimation
     } 
   } 
@@ -516,7 +517,7 @@ void stop_motor(motor_state_s* ms, client register_if reg) {
     // trigger flash write
     ms->update_flash = 1;
 
-    printf("Stopped Motor %u at position %d mm\n", ms->motor_idx, ms->position);
+    printf("Stopped Motor %u at position %d mm\n", ms->motor_idx, UM_to_MM(ms->position));
 
 }
 
@@ -536,10 +537,10 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
   unsigned dir_val;
   if(ms->state == OPENING) {
     dir_val = MOTOR_OPENING_DIR;
-    printf("Starting Motor %u at position %d mm in opening direction\n", ms->motor_idx, ms->position);
+    printf("Starting Motor %u at position %d mm in opening direction\n", ms->motor_idx, UM_to_MM(ms->position));
   } else if(ms->state == CLOSING) {
     dir_val = MOTOR_CLOSING_DIR;
-    printf("Starting Motor %u at position %d mm in closing direction\n", ms->motor_idx, ms->position);
+    printf("Starting Motor %u at position %d mm in closing direction\n", ms->motor_idx, UM_to_MM(ms->position));
   } else {
     // invalid
     return 1;
@@ -575,11 +576,10 @@ motor_state_s state_m0, state_m1;
 void mc_control(client register_if reg, chanend flash_c) {
 
     timer tmr_pos;
-    timer tmr_led;
     timer tmr_dbc; // debounce tiemr for p_control_buttons
     timer tmr_dbc_es;  
 
-    int t_dbc, t_dbc_es, t_pos, t_led;  // time variables
+    int t_dbc, t_dbc_es, t_pos;  // time variables
 
     unsigned buttons_changed = 0;
     unsigned endswitches_changed = 0;
@@ -637,24 +637,24 @@ void mc_control(client register_if reg, chanend flash_c) {
 
       if(byte_buffer[0] == FLASH_DATA_VALID_BYTE) {
         memcpy(&m0_pos, &byte_buffer[1], sizeof(int));
-        printf("Found valid position for Motor 0: %d\n", m0_pos);
+        printf("Found valid position for Motor 0: %d um\n", m0_pos);
       } 
       #if !ENDSWITCHES_CONNECTED
       else {
         m0_pos = CLOSED_POS_ES;
-        printf("Endswitches not connected. Initialising Motor 0 to arbitrary position %d\n", m0_pos);
+        printf("Endswitches not connected. Initialising Motor 0 to arbitrary position %d mm\n", UM_to_MM(m0_pos));
       }
       #endif
     
       // Init Motor 1 position
       if(byte_buffer[MOTOR_FLASH_AREA_SIZE] == FLASH_DATA_VALID_BYTE) {
         memcpy(&m1_pos, &byte_buffer[MOTOR_FLASH_AREA_SIZE+1], sizeof(int));
-        printf("Found valid position for Motor 1: %d\n", m1_pos);
+        printf("Found valid position for Motor 1: %d um\n", m1_pos);
       } 
       #if !ENDSWITCHES_CONNECTED
       else {
         m1_pos = CLOSED_POS_ES;
-        printf("Endswitches not connected. Initialising Motor 1 to arbitrary position %d\n", m1_pos);
+        printf("Endswitches not connected. Initialising Motor 1 to arbitrary position %d mm\n", UM_to_MM(m1_pos));
       }
       #endif
     }
@@ -669,7 +669,6 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     // Init!!
     tmr_pos :> t_pos;  // init position update time
-    tmr_led :> t_led;
 
     init_motor_state(&state_m0, reg, m0_pos, endswitches_m0, 0, t_pos);
     init_regs(&state_m0, reg);
@@ -700,9 +699,9 @@ void mc_control(client register_if reg, chanend flash_c) {
                   break;
                 }
                 case MOTOR_TARGET_POS_REG_OFFSET: {
-                  unsigned pos_mm = value * 10;
-                  state_m0.target_position = pos_mm;
-                  printf("I2C command setting new target_position %d mm for Motor 0\n", pos_mm);
+                  unsigned pos_um = CM_to_UM(value);
+                  state_m0.target_position = pos_um;
+                  printf("I2C command setting new target_position %d mm for Motor 0\n", UM_to_MM(pos_um));
                   break;
                 }
                 case NUM_REGS_PER_MOTOR+MOTOR_STATE_REG_OFFSET: {
@@ -716,9 +715,9 @@ void mc_control(client register_if reg, chanend flash_c) {
                   break;
                 }
                 case NUM_REGS_PER_MOTOR+MOTOR_TARGET_POS_REG_OFFSET: {  
-                  unsigned pos_mm = value * 10;
-                  state_m1.target_position = pos_mm;
-                  printf("I2C command setting new target_position %d mm for Motor 1\n", pos_mm);
+                  unsigned pos_um = CM_to_UM(value);
+                  state_m1.target_position = pos_um;
+                  printf("I2C command setting new target_position %d mm for Motor 1\n", UM_to_MM(pos_um));
                   break;
                 }
               }
@@ -785,7 +784,7 @@ void mc_control(client register_if reg, chanend flash_c) {
                     state_m0.position += pos_change;
                     printf("Motor 1 is closing. ");
                   }
-                  printf("Updated position estimate to %d mm using pos_change %d\n", state_m0.position, pos_change);
+                  printf("Updated position estimate to %d mm using pos_change %d um\n", UM_to_MM(state_m0.position), pos_change);
                   update_position_regs(&state_m0, reg);
                   check_and_handle_new_pos(&state_m0, reg);
 
@@ -803,7 +802,7 @@ void mc_control(client register_if reg, chanend flash_c) {
                     state_m1.position += pos_change;
                     printf("Motor 2 is closing. ");
                   }
-                  printf("Updated position estimate to %d mm using pos_change %d\n", state_m1.position, pos_change);
+                  printf("Updated position estimate to %d mm using pos_change %d\n", UM_to_MM(state_m1.position), pos_change);
                   update_position_regs(&state_m1, reg);
                   check_and_handle_new_pos(&state_m1, reg);
 
@@ -812,13 +811,8 @@ void mc_control(client register_if reg, chanend flash_c) {
                      state_m1.time_of_last_flash_update = t_pos;
                   }
               }; 
-
-              break;
-            
-            // Contol LEDs
-            case tmr_led when timerafter(t_led+LED_CYCLES) :> t_led:
               // Use this timer event to update LEDs
-              // toggle LED for to show motor controller is active
+              // toggle LED for to show motor controller is active and display the position update frequency
               led_val = 1-led_val;
               p_led <: (led_val << 3); // Green LED is on P4F3
               // Update pushbutton LEDs. 

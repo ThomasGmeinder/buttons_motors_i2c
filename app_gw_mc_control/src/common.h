@@ -32,7 +32,7 @@ typedef enum {
 
 // struct for motor state
 typedef struct {
-    int position; // in mm from 0 (open) to MAX_POS (closed)
+    int position; // in um from 0 (open) to MAX_POS (closed)
     int target_position; // the target position
     unsigned motor_idx;
     actuator_t actuator;
@@ -52,5 +52,11 @@ typedef struct {
 #define FLASH_DATA_VALID_BYTE 0x3C // arbitrary value
 #define MOTOR_FLASH_AREA_SIZE 5 // one byte marker, 4 bytes position
 #define FLASH_DATA_BYTES MOTOR_FLASH_AREA_SIZE*2
+
+// length translation macros
+#define MM_to_UM(mm) (mm*1000)
+#define UM_to_MM(um) (um/1000)
+#define CM_to_UM(cm) (cm*10000)
+#define UM_to_CM(um) (um/10000)
 
 #endif

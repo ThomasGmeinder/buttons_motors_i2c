@@ -344,7 +344,8 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
        if(ms->target_position >= CLOSED_POS_ES) { // Target position is at Closed Endswitch
          // Endswitch should stop the motor. Double heck here based on  
          if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
-           printf("Closing ventilation %d exceeded target position %d by %d mm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, UM_to_MM(ms->target_position), CLOSED_TOLERANCE);
+           printf("Closing ventilation %d: current position %d exceeded Endswith position %d by %d mm. Motor slower than expected or Closed Endswitch is not working. Emergency motor stop!\n"\
+            , ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position), UM_to_MM(CLOSED_TOLERANCE));
            stop_motor(ms, reg);
            ms->error = MOTOR_TOO_SLOW;
            update_error_state(ms, reg);
@@ -367,20 +368,23 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
      #if ENDSWITCHES_CONNECTED
        if(ms->target_position <= OPEN_POS_ES) { // Target position is at Open Endswitch, 
          if(ms->position <= ms->target_position - OPEN_TOLERANCE) {
-           printf("Opening ventilation %d exceeded target position %d by %d mm. Motor slower than expected or closed Endswitch is not working. Emergency motor stop!\n", ms->motor_idx, UM_to_MM(ms->target_position), OPEN_TOLERANCE);
+           printf("Opening ventilation %d: current position %d exceeded Endswith position %d by %d mm. Motor slower than expected or Open Endswitch is not working. Emergency motor stop!\n"\
+            , ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position), UM_to_MM(OPEN_TOLERANCE));
            stop_motor(ms, reg);
            ms->error = MOTOR_TOO_SLOW;
            update_error_state(ms, reg);
          } 
        } else {
          if(ms->position <= ms->target_position) {
-           printf("Opening ventilation %d is <= target position %d mm\n", ms->motor_idx, UM_to_MM(ms->target_position));
+           printf("Opening ventilation %d: current position %d <= target position %d mm\n"\
+            ,ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position));
            stop_motor(ms, reg);
          }  
        }
     #else
        if(ms->position <= ms->target_position) {
-         printf("Opening ventilation %d is <= target position %d mm\n", ms->motor_idx, UM_to_MM(ms->target_position));
+         printf("Opening ventilation %d: current position %d <= target position %d mm\n"\
+          ,ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position));
          stop_motor(ms, reg);
        }     
     #endif
@@ -391,8 +395,21 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
 void update_position_regs(motor_state_s* ms, client register_if reg) {
   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
   // Causes server control to take over after I2C control: 
+  int browser_pos = ms->position;
+
+  // correct the positions for the browser display if required.
+  // Related errors (MOTOR_TOO_SLOW, MOTOR_TOO_FAST) are flagged separately through error register
+  if(browser_pos >= CLOSED_POS_ES) {
+    // Browser cannot display positions > CLOSED_POS_ES
+    browser_pos = CLOSED_POS_ES; 
+  } else if(browser_pos <= OPEN_POS_ES) {
+    // Browser cannot display positions < OPEN_POS_ES
+    // This also avoids negative values which are invalid beause registers are uint8_t
+    browser_pos = OPEN_POS_ES; 
+  }
+
   reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  UM_to_CM(ms->target_position));
-  reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, UM_to_CM(ms->position));
+  reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, UM_to_CM(browser_pos));
 }
 
 void init_regs(motor_state_s* ms, client register_if reg) {
@@ -598,7 +615,7 @@ void mc_control(client register_if reg, chanend flash_c) {
     reg.set_register(SYSTEM_ID_REG_OFFSET, id);
 
     printf("Starting Greenhouse Motor Control Application on Controller with ID 0x%x\n\n", id);
-    printf("Motor speed is set to %u mm/s\n", MOTOR_SPEED);
+    printf("Motor speed is set to %u um/s\n", MOTOR_SPEED);
 
 
     #if ES_TRIGGERED==1

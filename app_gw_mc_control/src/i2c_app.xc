@@ -4,6 +4,7 @@
 
 #include "i2c.h"
 #include "debug_print.h"
+#include "string.h"
 #include "i2c_app.h"
 #include "common.h"
 
@@ -40,6 +41,7 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
                              server register_if app)
 {
   uint8_t registers[NUM_REGISTERS];
+  memset(registers, 0, NUM_REGISTERS*sizeof(uint8_t)); // Init regs to 0 to avoid errors from random values
   // Register,  I2C Access, Function
 
   // Note: Status register is used to enable handshake between remote client and this program.

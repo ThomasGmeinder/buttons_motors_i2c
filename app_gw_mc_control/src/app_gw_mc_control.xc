@@ -65,12 +65,19 @@
 #include "otp_board_info.h"
 #include "string.h"
 
-#define ENDSWITCHES_CONNECTED 0
+#define ENDSWITCHES_CONNECTED 1
 
 // Note: Positions are calculated in micrometers so that integer speed can be tuned better.
-#define MOTOR_SPEED 15000 // in um/s
+#define MOTOR_SPEED 15789 // in um/s
 #define OPEN_POS_MIN MM_to_UM(0) // min position 
 #define CLOSED_POS_MAX MM_to_UM(1200)  // max position in um
+
+// Measured times:
+// Opening: 76 seconds
+// opening speed: 15789 um/s 
+
+// Closing: 77 seconds
+// closing speed: 15584 um/s
 
 #define OPEN_POS_ES OPEN_POS_MIN  // Open position at Endswitch
 #define CLOSED_POS_ES CLOSED_POS_MAX
@@ -81,13 +88,14 @@
 #define CLOSED_TOLERANCE MM_to_UM(10) 
 
 #define DEBOUNCE 1
-#define DEBOUNCE_TIME XS1_TIMER_HZ/10  // 100ms
+// 250ms are needed because wwitching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
+#define DEBOUNCE_TIME XS1_TIMER_HZ/4  
 #define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
 #define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES*20 // Update flash every 2 seconds
 
 #define LED_CYCLES (XS1_TIMER_HZ/10) // 100ms
 
-#define ES_TRIGGERED 1 // End Switch triggered. Connects between brown and blue from Pin to VCC
+#define ES_TRIGGERED 0 // End Switch triggered openes the short to VCC an pin is pulled low.
 #define BUTTON_PRESSED 1 // Button pressed. 
 
 // Position index of buttons on the 4-bit port
@@ -122,6 +130,8 @@
 /** Inputs **/
 // Endswitches for both Motors
 on MC_TILE : in port p_endswitches = XS1_PORT_4C;   // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
+// Motor 0: bits 1:0
+// Motor 1: bits 3:2
 //on MC_TILE : in port p_endswitches = XS1_PORT_4E;  
 
 // Button to open and close the ventilations
@@ -314,7 +324,7 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
     ms->prev_error = NO_ERROR;
-    if(motor_pos == -1) {
+    if(motor_pos == INT_MIN) {
       ms->state = STATE_UNKNOWN;
       ms->error = POSITION_UNKNOWN;      
     } else {
@@ -439,11 +449,11 @@ void check_motor_state_after_endswitch_triggered(motor_state_s* ms, int actual_p
       ms->error = POSITION_UNKNOWN;
     } 
     else if(actual_position - ms->position > OPEN_TOLERANCE) {
-       printf("OPENING speed slower than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
+       printf("OPENING speed slower than estimate. Position is at %d mm when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
        ms->error = MOTOR_TOO_SLOW; // Motor slower than estimation
     } 
     else if(ms->position - actual_position > OPEN_TOLERANCE) {
-       printf("OPENING speed faster than estimate. Position is at %d when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
+       printf("OPENING speed faster than estimate. Position is at %d mm when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
        ms->error = MOTOR_TOO_FAST; // Motor faster than estimation
     }
   }
@@ -453,11 +463,11 @@ void check_motor_state_after_endswitch_triggered(motor_state_s* ms, int actual_p
       ms->error = POSITION_UNKNOWN;
     } 
     else if(actual_position - ms->position > CLOSED_TOLERANCE) {
-       printf("CLOSING speed faster than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
+       printf("CLOSING speed faster than estimate. Position is at %d mm when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
        ms->error = MOTOR_TOO_FAST; // Motor slower than estimation
     }   
     else if(ms->position - actual_position > CLOSED_TOLERANCE) {
-      printf("CLOSING speed slower than estimate. Position is at %d when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
+      printf("CLOSING speed slower than estimate. Position is at %d mm when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
        ms->error = MOTOR_TOO_SLOW; // Motor slower than estimation
     } 
   } 
@@ -605,7 +615,7 @@ void mc_control(client register_if reg, chanend flash_c) {
     unsigned led_val = 0;
 
     char mac_address[6];
-    // Read MAC address:
+    // Read MAC address:  
     otp_board_info_get_mac(otp_ports, 0, mac_address);
     printf("Read MAC Address");
     for(unsigned i=0; i<6; ++i) printf("0x%x ",mac_address[i]);
@@ -618,6 +628,7 @@ void mc_control(client register_if reg, chanend flash_c) {
     printf("Motor speed is set to %u um/s\n", MOTOR_SPEED);
 
 
+#if ENABLE_INTERNAL_PULLS
     #if ES_TRIGGERED==1
       // enable internal pulldowns for high active signals
       set_port_pull_down(p_endswitches);
@@ -632,11 +643,11 @@ void mc_control(client register_if reg, chanend flash_c) {
       // enable internal pulldowns for low active 
       set_port_pull_up(p_control_buttons);
     #endif
+#endif
 
 
-
-    int m1_pos = -1; // invalid
-    int m0_pos = -1; // ivalid
+    int m1_pos = INT_MIN; // invalid
+    int m0_pos = INT_MIN; // ivalid
 
     char command = 1;
     char result;
@@ -768,6 +779,7 @@ void mc_control(client register_if reg, chanend flash_c) {
             // Monitor Endswitches
             case (!endswitches_changed) => p_endswitches when pinsneq(prev_endswitches_val) :> prev_endswitches_val:
               // Port value changed which means some switch was pressed or released
+              printf("Endswitches port changed event. new value 0x%x\n", prev_endswitches_val);
               endswitches_changed = 1;
               tmr_dbc_es :> t_dbc_es; // update timer
 #if DEBOUNCE

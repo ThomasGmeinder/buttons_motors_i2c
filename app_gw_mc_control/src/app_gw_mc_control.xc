@@ -64,11 +64,11 @@
 #include "debug_print.h"
 #include "otp_board_info.h"
 #include "string.h"
+#include "spi_app.h"
 
 #define ENDSWITCHES_CONNECTED 1
 
 // Note: Positions are calculated in micrometers so that integer speed can be tuned better.
-#define MOTOR_SPEED 15789 // in um/s
 #define OPEN_POS_MIN MM_to_UM(0) // min position 
 #define CLOSED_POS_MAX MM_to_UM(1200)  // max position in um
 
@@ -90,12 +90,11 @@
 #define DEBOUNCE 1
 // 250ms are needed because wwitching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
 #define DEBOUNCE_TIME XS1_TIMER_HZ/4  
-#define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
 #define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES*20 // Update flash every 2 seconds
 
 #define LED_CYCLES (XS1_TIMER_HZ/10) // 100ms
 
-#define ES_TRIGGERED 0 // End Switch triggered openes the short to VCC an pin is pulled low.
+#define ES_TRIGGERED 0 // GPIO value when Endswitch is triggered. Note: GPIO has pulldown
 #define BUTTON_PRESSED 1 // Button pressed. 
 
 // Position index of buttons on the 4-bit port
@@ -138,14 +137,14 @@ on MC_TILE : in port p_endswitches = XS1_PORT_4C;   // X0D14 (pin 0), X0D15, X0D
 on MC_TILE : in port p_control_buttons = XS1_PORT_4D;  // X0D16, X0D17, X0D18, X0D19
  
 /** Outputs **/
-// Motor 1 on/off
+// Motor 0 on/off
 on MC_TILE : out port p_m0_on = XS1_PORT_1F;  // X0D13
-// Motor 1 direction
+// Motor 0 direction
 on MC_TILE : out port p_m0_dir = XS1_PORT_1E;  // X0D12
 
-// Motor 2 on/off
+// Motor 1 on/off
 on MC_TILE : out port p_m1_on = XS1_PORT_1P;  // X0D39
-// Motor 2 direction
+// Motor 1 direction
 on MC_TILE : out port p_m1_dir = XS1_PORT_1O;  // X0D38
 
 on MC_TILE : port p_slave_sda = XS1_PORT_1M; // X0D36 // connect to GPIO 3 on rPI
@@ -157,6 +156,15 @@ on MC_TILE : port p_m0_pushbutton_leds = XS1_PORT_4A; // X0D02, X0D03, X0D08, X0
 on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33
 
 on MC_TILE: otp_ports_t otp_ports = OTP_PORTS_INITIALIZER;
+
+/* These ports are used for the SPI master */
+out buffered port:32   p_sclk  = on MC_TILE: XS1_PORT_1I;
+out port               p_ss[1] = on MC_TILE: {XS1_PORT_1L};
+in buffered port:32    p_miso  = on MC_TILE: XS1_PORT_1J;
+out buffered port:32   p_mosi  = on MC_TILE: XS1_PORT_1K;
+
+clock clk0 = on tile[0]: XS1_CLKBLK_2;
+clock clk1 = on tile[0]: XS1_CLKBLK_3;
 
 extern void flash_server(chanend flash_c);
 
@@ -178,9 +186,14 @@ unsigned bit_set(unsigned bit_index, unsigned portval) {
   return ((portval >> bit_index) & 1) == BUTTON_PRESSED;
 }
 
-// Todo: replace with endswitches_triggered
-unsigned endswitch_triggered(unsigned endswitch_index, unsigned portval) {
-  return ((portval >> endswitch_index) & 1) == ES_TRIGGERED;
+unsigned position_in_range(int position) {
+   const int min = OPEN_POS_ES-OPEN_TOLERANCE;
+   const int max = CLOSED_POS_ES+CLOSED_TOLERANCE;
+   if(position < min|| position > max) {
+     printf("Position %d is out of range %d..%d\n", position, min, max);
+     return 0;
+   }
+   return 1;
 }
 
 int motor_endswitches_triggered(unsigned endswitches_val, unsigned mask) {
@@ -220,7 +233,7 @@ void update_error_state(motor_state_s* ms, client register_if reg) {
 }
 
 void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state_s* ms, client register_if reg, unsigned init) {
-#if ENDSWITCHES_CONNECTED
+
    printf("Checking endswitches portval 0x%x for Motor %d\n", motor_endswitches, ms->motor_idx);  
 
    unsigned update_error = 0; 
@@ -261,7 +274,6 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
    if(update_error) {
      update_error_state(ms, reg);
    }
-#endif
 }
 
 void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg) {
@@ -320,7 +332,9 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
   }
 }
 
-void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, unsigned endswitches_val, unsigned motor_idx, int t) {
+void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
+  unsigned opening_speed, unsigned closing_speed,
+  unsigned endswitches_val, unsigned motor_idx, int t) {
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
     ms->prev_error = NO_ERROR;
@@ -337,9 +351,20 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
     ms->close_button_blink_counter = 0;
     ms->update_flash = 0;
     ms->time_of_last_flash_update = t;
+
+    ms->opening_speed = opening_speed;
+    ms->closing_speed = closing_speed;
+
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+    ms->AC_current_hysteresis_counter = 0;
+    ms->AC_current_on = 0;
+    ms->detect_endswitches_from_AC_current = 0;
+#endif
+
+#if !INFER_ENDSWITCHES_WITH_AC_SENSOR && ENDSWITCHES_CONNECTED
     // Check endswitches and compare with position read from flash
     check_endswitches_and_update_states(endswitches_val, ms, reg, 1);
-
+#endif
 }
 
 void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
@@ -359,17 +384,20 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
            stop_motor(ms, reg);
            ms->error = MOTOR_TOO_SLOW;
            update_error_state(ms, reg);
+           return;
          }
        } else { 
          if(ms->position >= ms->target_position) {
            printf("Closing ventilation %d is >= target position %d mm\n", ms->motor_idx, UM_to_MM(ms->target_position));
            stop_motor(ms, reg);
+           return;
          }   
        }
     #else
        if(ms->position >= ms->target_position) {
          printf("Closing ventilation %d is >= target position %d mm\n", ms->motor_idx, UM_to_MM(ms->target_position));
          stop_motor(ms, reg);
+         return;
        }         
     #endif 
 
@@ -383,12 +411,14 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
            stop_motor(ms, reg);
            ms->error = MOTOR_TOO_SLOW;
            update_error_state(ms, reg);
+           return;
          } 
        } else {
          if(ms->position <= ms->target_position) {
            printf("Opening ventilation %d: current position %d <= target position %d mm\n"\
             ,ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position));
            stop_motor(ms, reg);
+           return;
          }  
        }
     #else
@@ -396,9 +426,16 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
          printf("Opening ventilation %d: current position %d <= target position %d mm\n"\
           ,ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position));
          stop_motor(ms, reg);
+         return;
        }     
     #endif
    }
+ 
+   if(!position_in_range(ms->position)) {
+      ms->error = POSITION_UNKNOWN;
+      update_error_state(ms, reg); 
+   }
+
 }
 
 // Update the Read only registers
@@ -549,6 +586,14 @@ void stop_motor(motor_state_s* ms, client register_if reg) {
 }
 
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) {
+  timer tmr;
+
+  tmr :> ms->start_time;
+
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+  // reset the flag
+  ms->detect_endswitches_from_AC_current = 0;
+#endif 
 
   ms->actuator = actuator;
 
@@ -597,6 +642,62 @@ int motor_moved_by_button(motor_state_s* ms, client register_if reg) {
   return 0; 
 }
 
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+void update_motor_current_state(motor_state_s* ms) {
+  int adc_val = get_adc_value(ms->motor_idx);
+  //printf("update_motor_current_state: Motor %d, AC_current_on %d, adc_val %d\n", ms->motor_idx, ms->AC_current_on, adc_val);
+  if(ms->AC_current_on) {
+    if(adc_val <= MOTOR_CURRENT_OFF_THRESHOLD) {
+       ms->AC_current_hysteresis_counter++;
+       if(ms->AC_current_hysteresis_counter > MOTOR_CURRENT_HYSTERESIS_PERIODS) {
+          ms->AC_current_on = 0; 
+          printf("Changing AC current state to OFF for Motor %d\n", ms->motor_idx);
+          ms->AC_current_hysteresis_counter = 0;
+       }
+    } else if(adc_val >= MOTOR_CURRENT_ON_THRESHOLD) {
+       ms->AC_current_hysteresis_counter = 0; 
+    }
+  } else if(!ms->AC_current_on) {
+    if(adc_val >= MOTOR_CURRENT_ON_THRESHOLD) {
+       ms->AC_current_hysteresis_counter++;
+       if(ms->AC_current_hysteresis_counter > MOTOR_CURRENT_HYSTERESIS_PERIODS) {
+          ms->AC_current_on = 1;  
+          printf("Changing AC current state to ON for Motor %d\n", ms->motor_idx);
+          ms->AC_current_hysteresis_counter = 0;
+       }
+    } else if(adc_val <= MOTOR_CURRENT_OFF_THRESHOLD) {
+       ms->AC_current_hysteresis_counter = 0; 
+    }
+  }
+}
+
+void monitor_motor_current(motor_state_s* ms, client register_if reg) {
+   timer tmr;
+   int current_time;
+   tmr :> current_time;
+
+   if((current_time - ms->start_time)/POS_UPDATE_PERIOD_CYCLES > MOTOR_CURRENT_ON_PERIODS) {
+      if(ms->AC_current_on) ms->detect_endswitches_from_AC_current = 1;
+
+      if(!ms->detect_endswitches_from_AC_current) printf("WARNING: Motor current sensor detected no current in Motor %d after it was switched on\n", ms->motor_idx);
+   }
+
+   if(ms->detect_endswitches_from_AC_current) {
+     // current was detected after motor was switched on.
+     // Now detect when Endswitch is switching current back off
+     if(ms->state == OPENING && !ms->AC_current_on) {
+        printf("Motor %d Current was switched off whilst Opening -> Open Endswitch triggered\n", ms->motor_idx);
+        unsigned mimick_endswitch_value = ES_TRIGGERED == 1 ? ENDSWITCH_OPEN : (~ENDSWITCH_OPEN)&0x3; 
+        check_endswitches_and_update_states(mimick_endswitch_value, ms, reg, 0);
+     } else if(ms->state == CLOSING && !ms->AC_current_on) {
+        printf("Motor %d Current was switched off whilst Closing -> Closed Endswitch triggered\n", ms->motor_idx);
+        unsigned mimick_endswitch_value = ES_TRIGGERED == 1 ? ENDSWITCH_CLOSED : (~ENDSWITCH_CLOSED)&0x3; 
+        check_endswitches_and_update_states(mimick_endswitch_value, ms, reg, 0);
+     }
+   }
+}
+#endif
+
 // global shared memory
 motor_state_s state_m0, state_m1;
 
@@ -625,7 +726,6 @@ void mc_control(client register_if reg, chanend flash_c) {
     reg.set_register(SYSTEM_ID_REG_OFFSET, id);
 
     printf("Starting Greenhouse Motor Control Application on Controller with ID 0x%x\n\n", id);
-    printf("Motor speed is set to %u um/s\n", MOTOR_SPEED);
 
 
 #if ENABLE_INTERNAL_PULLS
@@ -665,9 +765,15 @@ void mc_control(client register_if reg, chanend flash_c) {
 
       if(byte_buffer[0] == FLASH_DATA_VALID_BYTE) {
         memcpy(&m0_pos, &byte_buffer[1], sizeof(int));
-        printf("Found valid position for Motor 0: %d um\n", m0_pos);
+        if(position_in_range(m0_pos)) {
+          printf("Found valid position for Motor 0: %d um\n", m0_pos);          
+        } else {
+          printf("Error: Position in flash is out of range for Motor 0: %d um\n", m0_pos);
+          m0_pos = INT_MIN;
+        }
+
       } 
-      #if !ENDSWITCHES_CONNECTED
+      #if !ENDSWITCHES_CONNECTED || INFER_ENDSWITCHES_WITH_AC_SENSOR
       else {
         m0_pos = CLOSED_POS_ES;
         printf("Endswitches not connected. Initialising Motor 0 to arbitrary position %d mm\n", UM_to_MM(m0_pos));
@@ -677,9 +783,14 @@ void mc_control(client register_if reg, chanend flash_c) {
       // Init Motor 1 position
       if(byte_buffer[MOTOR_FLASH_AREA_SIZE] == FLASH_DATA_VALID_BYTE) {
         memcpy(&m1_pos, &byte_buffer[MOTOR_FLASH_AREA_SIZE+1], sizeof(int));
-        printf("Found valid position for Motor 1: %d um\n", m1_pos);
+        if(position_in_range(m1_pos)) {
+          printf("Found valid position for Motor 1: %d um\n", m1_pos);          
+        } else {
+          printf("Error: Position in flash is out of range for Motor 1: %d um\n", m1_pos);
+          m1_pos = INT_MIN;
+        }
       } 
-      #if !ENDSWITCHES_CONNECTED
+      #if !ENDSWITCHES_CONNECTED || INFER_ENDSWITCHES_WITH_AC_SENSOR
       else {
         m1_pos = CLOSED_POS_ES;
         printf("Endswitches not connected. Initialising Motor 1 to arbitrary position %d mm\n", UM_to_MM(m1_pos));
@@ -698,9 +809,9 @@ void mc_control(client register_if reg, chanend flash_c) {
     // Init!!
     tmr_pos :> t_pos;  // init position update time
 
-    init_motor_state(&state_m0, reg, m0_pos, endswitches_m0, 0, t_pos);
+    init_motor_state(&state_m0, reg, m0_pos, 15800, 15600, endswitches_m0, 0, t_pos);
     init_regs(&state_m0, reg);
-    init_motor_state(&state_m1, reg, m1_pos, endswitches_m1, 1, t_pos);
+    init_motor_state(&state_m1, reg, m1_pos, 15800, 15600, endswitches_m1, 1, t_pos);
     init_regs(&state_m1, reg);
 
     while(1) {
@@ -776,6 +887,8 @@ void mc_control(client register_if reg, chanend flash_c) {
               }
               break;
 
+#if !INFER_ENDSWITCHES_WITH_AC_SENSOR            
+            // Endswitches are connected with a cable
             // Monitor Endswitches
             case (!endswitches_changed) => p_endswitches when pinsneq(prev_endswitches_val) :> prev_endswitches_val:
               // Port value changed which means some switch was pressed or released
@@ -799,20 +912,37 @@ void mc_control(client register_if reg, chanend flash_c) {
                 check_endswitches_and_update_states(endswitches_m1, &state_m1, reg, 0); // Check that Open and Closed are not triggered at the same time
               }
               break;
+#endif
 
             // Position estimation
             case tmr_pos when timerafter(t_pos+POS_UPDATE_PERIOD_CYCLES) :> t_pos:
-              // position change per update period in mm
-              const unsigned pos_change =  (unsigned long long) MOTOR_SPEED * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+              // Endswitch value is inferred using AC Sensor
+              //for(unsigned c=0; c<NUM_ADC_CHANNELS; ++c) {
+              //    printf("ADC channel %d value: 0x%x\n", c, get_adc_value(c));
+              //}
+              update_motor_current_state(&state_m0);
+              update_motor_current_state(&state_m1);
+#endif
               
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
               if(state_m0.state == OPENING || state_m0.state == CLOSING) {
+                  monitor_motor_current(&state_m0, reg);
+              }
+              // Note: monitor_motor_current can change motor state
+#endif
+
+              if(state_m0.state == OPENING || state_m0.state == CLOSING) {    
+                  int pos_change;
                   if(state_m0.state == OPENING) {
-                    state_m0.position -= pos_change;
-                    printf("Motor 1 is opening. ");
+                    pos_change = - (int64_t) state_m0.opening_speed * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
+                    //state_m0.position -= pos_change;
+                    printf("Motor 0 is opening. ");
                   } else {
-                    state_m0.position += pos_change;
-                    printf("Motor 1 is closing. ");
+                    pos_change =  (int64_t) state_m0.opening_speed * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
+                    printf("Motor 0 is closing. ");
                   }
+                  state_m0.position += pos_change;
                   printf("Updated position estimate to %d mm using pos_change %d um\n", UM_to_MM(state_m0.position), pos_change);
                   update_position_regs(&state_m0, reg);
                   check_and_handle_new_pos(&state_m0, reg);
@@ -821,16 +951,24 @@ void mc_control(client register_if reg, chanend flash_c) {
                      state_m0.update_flash = 1;
                      state_m0.time_of_last_flash_update = t_pos;
                   }
-
               }; 
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
               if(state_m1.state == OPENING || state_m1.state == CLOSING) {
+                  monitor_motor_current(&state_m1, reg);
+              }
+              // Note: monitor_motor_current can change motor state
+#endif
+              if(state_m1.state == OPENING || state_m1.state == CLOSING) {  
+                  int pos_change;
                   if(state_m1.state == OPENING) {
-                    state_m1.position -= pos_change;
+                    pos_change = - (int64_t) state_m1.opening_speed * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
+                    //state_m1.position -= pos_change;
                     printf("Motor 1 is opening. ");
                   } else {
-                    state_m1.position += pos_change;
-                    printf("Motor 2 is closing. ");
+                    pos_change =  (int64_t) state_m1.opening_speed * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
+                    printf("Motor 1 is closing. ");
                   }
+                  state_m1.position += pos_change;
                   printf("Updated position estimate to %d mm using pos_change %d\n", UM_to_MM(state_m1.position), pos_change);
                   update_position_regs(&state_m1, reg);
                   check_and_handle_new_pos(&state_m1, reg);
@@ -848,7 +986,6 @@ void mc_control(client register_if reg, chanend flash_c) {
               update_pushbutton_leds(&state_m0);
               update_pushbutton_leds(&state_m1);
               break;
-
 
         }
     }
@@ -872,10 +1009,22 @@ int main() {
   chan flash_c;
   //debug_printf("Starting I2C enabled Motoro Controller\n");
 
-    par {
-      on MC_TILE : i2c_control(i_reg);
-      on MC_TILE : mc_control(i_reg, flash_c);
-      on MC_TILE : flash_server(flash_c);
-    }
-    return 0;
+#if ACCESS_ADC_VIA_SPI
+  interface spi_master_if i_spi[1];
+#endif
+
+  par {
+    on MC_TILE : i2c_control(i_reg);
+    on MC_TILE : mc_control(i_reg, flash_c);
+    on MC_TILE : flash_server(flash_c);
+
+#if ACCESS_ADC_VIA_SPI
+    on MC_TILE: spi_app(i_spi[0]);
+    on MC_TILE: spi_master(i_spi, 1,
+                         p_sclk, p_mosi, p_miso, p_ss, 1,
+                         null);
+#endif
+  }
+
+  return 0;
 }

@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include <common.h>
+#include "common.h"
 
 // List of QuadSPI devices that are supported by default.
 fl_QuadDeviceSpec deviceSpecs[] =

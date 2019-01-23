@@ -1,6 +1,19 @@
 #ifndef _common_h_
 #define _common_h_
 
+#define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
+#define INFER_ENDSWITCHES_WITH_AC_SENSOR 1  
+
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+#define ACCESS_ADC_VIA_SPI 1
+#define NUM_ADC_CHANNELS 2
+#define MOTOR_CURRENT_OFF_THRESHOLD 10
+#define MOTOR_CURRENT_ON_THRESHOLD 100
+#define MOTOR_CURRENT_HYSTERESIS_PERIODS 5 // 5 * 100ms = 0.5s
+// Todo: Fix time to ref clock cycles not update periods
+#define MOTOR_CURRENT_ON_PERIODS MOTOR_CURRENT_HYSTERESIS_PERIODS + 1 // time until mutor current must be detected
+#endif
+
 typedef enum {
     OPENING,
     CLOSING,
@@ -37,15 +50,27 @@ typedef struct {
     unsigned motor_idx;
     actuator_t actuator;
 
+    int start_time;
+
     motor_state_t state;
     motor_error_t error;
     motor_error_t prev_error;
+
+    // speed in um/s to have right resolution
+    unsigned opening_speed;
+    unsigned closing_speed;
 
     int open_button_blink_counter; 
     int close_button_blink_counter;
 
     int time_of_last_flash_update;
     unsigned update_flash; // shared memory flag to trigger flash write
+
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+    unsigned AC_current_hysteresis_counter;
+    unsigned AC_current_on;
+    unsigned detect_endswitches_from_AC_current;
+#endif
 
 } motor_state_s;
 

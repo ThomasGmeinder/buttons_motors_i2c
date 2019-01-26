@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include "common.h"
 
-int read_mpc3008_adc_channel(client spi_master_if spi, unsigned adc_chan) {
+int read_mpc3008_adc_channel(client spi_master_if spi, unsigned adc_chan, unsigned spi_clk_khz) {
 
     uint8_t val;
     int adc_val = 0;
@@ -18,7 +18,7 @@ int read_mpc3008_adc_channel(client spi_master_if spi, unsigned adc_chan) {
 
     //printf("Reading ADC channel %d with command 0x%x\n", adc_chan, command);
 
-    spi.begin_transaction(0, 100, SPI_MODE_2);
+    spi.begin_transaction(0, spi_clk_khz, SPI_MODE_2);
     val = spi.transfer8(0x1); // Start bit
 
     val = spi.transfer8(command); // Single, D2..D0
@@ -26,7 +26,7 @@ int read_mpc3008_adc_channel(client spi_master_if spi, unsigned adc_chan) {
     adc_val = (val << 8);
     val = spi.transfer8(0x0);  // Read remaining bits
     adc_val |= val;
-    spi.end_transaction(100);
+    spi.end_transaction(spi_clk_khz);
 
     return adc_val;
 }
@@ -43,12 +43,18 @@ int adc_values[NUM_ADC_CHANNELS];
 void spi_app(client spi_master_if spi)
 {
 
+    const unsigned spi_clk_khz = 1000;
     printstrln("Starting SPI access");
-    delay_microseconds(30);
+    delay_microseconds(100);
+
+    printf("Reading all available ADC channels for testing:\n");
+    for(unsigned c=0; c<8; ++c) {
+        printf("ADC %d: 0x%x\n", c, read_mpc3008_adc_channel(spi, c, spi_clk_khz));
+    }
 
     while(1) {
         for(unsigned c=0; c<NUM_ADC_CHANNELS; ++c) {
-            adc_values[c] = read_mpc3008_adc_channel(spi, c);
+            adc_values[c] = read_mpc3008_adc_channel(spi, c, spi_clk_khz);
         }
     }
 #if 0

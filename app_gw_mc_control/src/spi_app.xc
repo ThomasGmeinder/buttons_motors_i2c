@@ -7,6 +7,7 @@
 #include <platform.h>
 #include <stdio.h>
 #include "common.h"
+#include "dsp.h"
 
 int read_mpc3008_adc_channel(client spi_master_if spi, unsigned adc_chan, unsigned spi_clk_khz) {
 
@@ -38,10 +39,67 @@ int read_mpc3008_adc_channel(client spi_master_if spi, unsigned adc_chan, unsign
  */
 
 #if ACCESS_ADC_VIA_SPI
-int adc_values[NUM_ADC_CHANNELS];
+
+#define ADC_SAMPLING_INTERVAL 100 * 500 // 500 us
+
+#define ADC_MIN 0x0
+#define ADC_MAX 0x3ff
+#define ADC_HALF ADC_MAX>>1
+
+#define SENSITIVITY Q16(10) // 10 A/V (20A module is 100mV/A) 
+
+unsigned adc_value[NUM_ADC_CHANNELS];
+int32_t current_rms_q16[NUM_ADC_CHANNELS];
+
+unsigned average_counter[NUM_ADC_CHANNELS];
+
+#define AVG_SAMPLES 40 // Samples for a whole 50Hz period
+
+unsigned min_adc_val[NUM_ADC_CHANNELS] = {ADC_MAX, ADC_MAX};  
+unsigned max_adc_val[NUM_ADC_CHANNELS] = {ADC_MIN, ADC_MIN};  
+
+#define GEN_ADC_VALUE 1
+
+void process_adc_value(unsigned c, int adc_value) {
+
+#if GEN_ADC_VALUE
+  q8_24 sine = dsp_math_sin(average_counter[c]*PI2_Q8_24/AVG_SAMPLES); 
+  //printf("Generated sine value: %.2f\n", F24(sine));
+  // continue with Q16
+  sine = sine >> 8;
+  adc_value = dsp_math_multiply(sine, Q16(ADC_HALF), 16) + Q16(ADC_HALF);
+  //adc_value = (sine >> 8) * ADC_HALF + Q16(ADC_HALF);
+  adc_value = adc_value >> 16; // truncate fractional
+  adc_value >>= c; // shift by channel index to distinguish channels
+  //printf("Generated ADC value: 0x%x\n", adc_value);
+#endif
+
+  if(adc_value < min_adc_val[c]) min_adc_val[c] = adc_value;
+  if(adc_value > max_adc_val[c]) max_adc_val[c] = adc_value;
+
+  average_counter[c]++;
+
+  if(average_counter[c] >= AVG_SAMPLES) {
+    int32_t delta = max_adc_val[c] - min_adc_val[c];
+    int32_t Vpp = dsp_math_multiply(Q16(delta), Q16(5), 16);
+    Vpp = dsp_math_divide(Vpp, Q16(ADC_MAX), 16); // Actual voltage
+    int32_t Vp = Vpp/2; // Peak voltage
+    int32_t Vrms = dsp_math_multiply(Vp, Q16(0.707106781186548), 16);
+    current_rms_q16[c] = dsp_math_multiply(Vrms, SENSITIVITY, 16);
+    
+    // reset values
+    average_counter[c]=0;
+    min_adc_val[c]=ADC_MAX;  
+    max_adc_val[c]=ADC_MIN; 
+  }
+}
+
 
 void spi_app(client spi_master_if spi)
 {
+
+    timer sample_tmr;
+    int t;
 
     const unsigned spi_clk_khz = 1000;
     printstrln("Starting SPI access");
@@ -52,9 +110,13 @@ void spi_app(client spi_master_if spi)
         printf("ADC %d: 0x%x\n", c, read_mpc3008_adc_channel(spi, c, spi_clk_khz));
     }
 
+    sample_tmr :>  t;
+
     while(1) {
+        sample_tmr when timerafter(t+ADC_SAMPLING_INTERVAL) :> t; 
         for(unsigned c=0; c<NUM_ADC_CHANNELS; ++c) {
-            adc_values[c] = read_mpc3008_adc_channel(spi, c, spi_clk_khz);
+            adc_value[c] = read_mpc3008_adc_channel(spi, c, spi_clk_khz);
+            process_adc_value(c, adc_value[c]);
         }
     }
 #if 0

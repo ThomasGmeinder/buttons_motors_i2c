@@ -65,6 +65,7 @@
 #include "otp_board_info.h"
 #include "string.h"
 #include "spi_app.h"
+#include "dsp.h"
 
 #define ENDSWITCHES_CONNECTED 1
 
@@ -157,14 +158,16 @@ on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0
 
 on MC_TILE: otp_ports_t otp_ports = OTP_PORTS_INITIALIZER;
 
+#if ACCESS_ADC_VIA_SPI
 /* These ports are used for the SPI master */
-out buffered port:32   p_sclk  = on MC_TILE: XS1_PORT_1I;
-out port               p_ss[1] = on MC_TILE: {XS1_PORT_1L};
-in buffered port:32    p_miso  = on MC_TILE: XS1_PORT_1J;
-out buffered port:32   p_mosi  = on MC_TILE: XS1_PORT_1K;
+out buffered port:32   p_sclk  = on MC_TILE: XS1_PORT_1I; // X0D24 (23)
+out port               p_ss[1] = on MC_TILE: {XS1_PORT_1L}; // X0D35 (17)
+in buffered port:32    p_miso  = on MC_TILE: XS1_PORT_1J; // X0D25 (21)
+out buffered port:32   p_mosi  = on MC_TILE: XS1_PORT_1K; // X0D34 (19)
 
 clock clk0 = on tile[0]: XS1_CLKBLK_2;
 clock clk1 = on tile[0]: XS1_CLKBLK_3;
+#endif
 
 extern void flash_server(chanend flash_c);
 
@@ -644,28 +647,28 @@ int motor_moved_by_button(motor_state_s* ms, client register_if reg) {
 
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
 void update_motor_current_state(motor_state_s* ms) {
-  int adc_val = get_adc_value(ms->motor_idx);
-  //printf("update_motor_current_state: Motor %d, AC_current_on %d, adc_val %d\n", ms->motor_idx, ms->AC_current_on, adc_val);
+  int32_t rms_current_q16 = get_rms_current(ms->motor_idx);
+  printf("update_motor_current_state: Motor %d, AC_current_on %d, rms_current %.2f A\n", ms->motor_idx, ms->AC_current_on, F16(rms_current_q16));
   if(ms->AC_current_on) {
-    if(adc_val <= MOTOR_CURRENT_OFF_THRESHOLD) {
+    if(rms_current_q16 <= MOTOR_CURRENT_OFF_THRESHOLD) {
        ms->AC_current_hysteresis_counter++;
        if(ms->AC_current_hysteresis_counter > MOTOR_CURRENT_HYSTERESIS_PERIODS) {
           ms->AC_current_on = 0; 
           printf("Changing AC current state to OFF for Motor %d\n", ms->motor_idx);
           ms->AC_current_hysteresis_counter = 0;
        }
-    } else if(adc_val >= MOTOR_CURRENT_ON_THRESHOLD) {
+    } else if(rms_current_q16 >= MOTOR_CURRENT_ON_THRESHOLD) {
        ms->AC_current_hysteresis_counter = 0; 
     }
   } else if(!ms->AC_current_on) {
-    if(adc_val >= MOTOR_CURRENT_ON_THRESHOLD) {
+    if(rms_current_q16 >= MOTOR_CURRENT_ON_THRESHOLD) {
        ms->AC_current_hysteresis_counter++;
        if(ms->AC_current_hysteresis_counter > MOTOR_CURRENT_HYSTERESIS_PERIODS) {
           ms->AC_current_on = 1;  
           printf("Changing AC current state to ON for Motor %d\n", ms->motor_idx);
           ms->AC_current_hysteresis_counter = 0;
        }
-    } else if(adc_val <= MOTOR_CURRENT_OFF_THRESHOLD) {
+    } else if(rms_current_q16 <= MOTOR_CURRENT_OFF_THRESHOLD) {
        ms->AC_current_hysteresis_counter = 0; 
     }
   }
@@ -919,7 +922,7 @@ void mc_control(client register_if reg, chanend flash_c) {
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
               // Endswitch value is inferred using AC Sensor
               //for(unsigned c=0; c<NUM_ADC_CHANNELS; ++c) {
-              //    printf("ADC channel %d value: 0x%x\n", c, get_adc_value(c));
+              //    printf("ADC channel %d value: 0x%x\n", c, get_rms_current(c));
               //}
               update_motor_current_state(&state_m0);
               update_motor_current_state(&state_m1);

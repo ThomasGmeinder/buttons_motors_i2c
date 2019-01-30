@@ -6,7 +6,7 @@
 
 void spi_app(client spi_master_if spi);
 
-int get_adc_value(unsigned adc_chan);
+int get_rms_current(unsigned adc_chan);
 
 #endif
 

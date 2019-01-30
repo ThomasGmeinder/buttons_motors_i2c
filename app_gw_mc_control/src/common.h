@@ -7,8 +7,8 @@
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
 #define ACCESS_ADC_VIA_SPI 1
 #define NUM_ADC_CHANNELS 2
-#define MOTOR_CURRENT_OFF_THRESHOLD 10
-#define MOTOR_CURRENT_ON_THRESHOLD 100
+#define MOTOR_CURRENT_OFF_THRESHOLD Q24(10) // 10 mA
+#define MOTOR_CURRENT_ON_THRESHOLD Q24(100) // 100 mA
 #define MOTOR_CURRENT_HYSTERESIS_PERIODS 5 // 5 * 100ms = 0.5s
 // Todo: Fix time to ref clock cycles not update periods
 #define MOTOR_CURRENT_ON_PERIODS MOTOR_CURRENT_HYSTERESIS_PERIODS + 1 // time until mutor current must be detected

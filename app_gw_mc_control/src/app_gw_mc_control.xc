@@ -648,7 +648,7 @@ int motor_moved_by_button(motor_state_s* ms, client register_if reg) {
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
 void update_motor_current_state(motor_state_s* ms) {
   int32_t rms_current_q16 = get_rms_current(ms->motor_idx);
-  printf("update_motor_current_state: Motor %d, AC_current_on %d, rms_current %.2f A\n", ms->motor_idx, ms->AC_current_on, F16(rms_current_q16));
+  //printf("update_motor_current_state: Motor %d, AC_current_on %d, rms_current %.2f A\n", ms->motor_idx, ms->AC_current_on, F16(rms_current_q16));
   if(ms->AC_current_on) {
     if(rms_current_q16 <= MOTOR_CURRENT_OFF_THRESHOLD) {
        ms->AC_current_hysteresis_counter++;

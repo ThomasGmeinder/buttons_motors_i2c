@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include "common.h"
 #include "dsp.h"
+#include "xscope.h"
 
 int read_mpc3008_adc_channel(client spi_master_if spi, unsigned adc_chan, unsigned spi_clk_khz) {
 
@@ -63,17 +64,11 @@ unsigned average_counter[NUM_ADC_CHANNELS];
 unsigned min_adc_val[NUM_ADC_CHANNELS] = {ADC_MAX, ADC_MAX};  
 unsigned max_adc_val[NUM_ADC_CHANNELS] = {ADC_MIN, ADC_MIN};  
 
-#define GEN_ADC_VALUE 1
+#define GEN_ADC_VALUE 0
 
-q8_24 adc_sine_values[SAMPLES_PER_SINE];
+int32_t adc_sine_values[SAMPLES_PER_SINE];
 
 void process_adc_value(unsigned c, int adc_value) {
-
-
-#if GEN_ADC_VALUE
-   adc_value = adc_sine_values[average_counter[c]];
-   adc_value >>= c; // shift by channel index to distinguish channels
-#endif
 
   if(adc_value < min_adc_val[c]) min_adc_val[c] = adc_value;
   if(adc_value > max_adc_val[c]) max_adc_val[c] = adc_value;
@@ -87,7 +82,7 @@ void process_adc_value(unsigned c, int adc_value) {
     int32_t Vpp = dsp_math_multiply(Q16(delta), Q16(5), 16);
     Vpp = dsp_math_divide(Vpp, Q16(ADC_MAX), 16); // Actual voltage
     int32_t Vp = Vpp/2; // Peak voltage
-    int32_t Vrms = dsp_math_multiply(Vp, Q16(0.707106781186548), 16);
+    int32_t Vrms = dsp_math_multiply(Vp, Q16(0.707106781186548), 16); // multiply with sqrt(2)
     current_rms_q16[c] = dsp_math_multiply(Vrms, SENSITIVITY, 16);
     
     // reset values
@@ -95,6 +90,7 @@ void process_adc_value(unsigned c, int adc_value) {
     min_adc_val[c]=ADC_MAX;  
     max_adc_val[c]=ADC_MIN; 
   }
+  if(c==0) xscope_float(CURRENT_RMS, F16(current_rms_q16[c]));
 }
 
 
@@ -153,12 +149,17 @@ void spi_app(client spi_master_if spi)
 #endif
         for(unsigned c=0; c<NUM_ADC_CHANNELS; ++c) {
             adc_value[c] = read_mpc3008_adc_channel(spi, c, spi_clk_khz);
+#if GEN_ADC_VALUE
+            adc_value[c] = adc_sine_values[average_counter[c]];
+            adc_value[c] >>= c; // shift by channel index to distinguish channels
+#endif
             process_adc_value(c, adc_value[c]);
         }
 #if MEASURE_TIME
         measure_tmr :> t1;
         printf("Sampling and Processing ADC values from %d channels takes %d cycles\n", NUM_ADC_CHANNELS, t1-t0);
 #endif
+        xscope_int(ADC, adc_value[0]);
 
     }
 

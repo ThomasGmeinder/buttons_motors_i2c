@@ -8,7 +8,7 @@
 #define ACCESS_ADC_VIA_SPI 1
 #define NUM_ADC_CHANNELS 2
 #define MOTOR_CURRENT_OFF_THRESHOLD Q16(0.1) // 100 mA
-#define MOTOR_CURRENT_ON_THRESHOLD Q16(5) // 5 A
+#define MOTOR_CURRENT_ON_THRESHOLD Q16(0.2) // 200 mA
 #define MOTOR_CURRENT_HYSTERESIS_PERIODS 5 // 5 * 100ms = 0.5s
 // Todo: Fix time to ref clock cycles not update periods
 #define MOTOR_CURRENT_ON_PERIODS MOTOR_CURRENT_HYSTERESIS_PERIODS + 1 // time until mutor current must be detected

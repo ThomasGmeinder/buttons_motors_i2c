@@ -98,6 +98,8 @@
 #define ES_TRIGGERED 0 // GPIO value when Endswitch is triggered. Note: GPIO has pulldown
 #define BUTTON_PRESSED 1 // Button pressed. 
 
+#define DEBUG_BUTTON_LOGIC 1
+
 // Position index of buttons on the 4-bit port
 #define CLOSE_BUTTON_IDX 0
 #define OPEN_BUTTON_IDX 1
@@ -748,7 +750,6 @@ void mc_control(client register_if reg, chanend flash_c) {
     #endif
 #endif
 
-
     int m1_pos = INT_MIN; // invalid
     int m0_pos = INT_MIN; // ivalid
 
@@ -868,6 +869,7 @@ void mc_control(client register_if reg, chanend flash_c) {
             // Monitor control buttons
             case (!buttons_changed) => p_control_buttons when pinsneq(prev_control_buttons_val) :> prev_control_buttons_val:
               // Port value changed which means some button was pressed or released
+              if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons port value changed to 0x%x\n", prev_control_buttons_val);
               buttons_changed = 1;
               tmr_dbc :> t_dbc; // update timer
 #if DEBOUNCE
@@ -887,6 +889,8 @@ void mc_control(client register_if reg, chanend flash_c) {
                 check_control_buttons_and_update_states(control_buttons_m0, &state_m0, reg); 
                 check_control_buttons_and_update_states(control_buttons_m1, &state_m1, reg); 
 
+              } else {
+                if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
               }
               break;
 

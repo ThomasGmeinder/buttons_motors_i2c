@@ -959,7 +959,7 @@ void mc_control(client register_if reg, chanend flash_c) {
                     //state_m0.position -= pos_change;
                     printf("Motor 0 is opening. ");
                   } else {
-                    pos_change =  (int64_t) state_m0.opening_speed * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
+                    pos_change =  (int64_t) state_m0.closing_speed * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
                     printf("Motor 0 is closing. ");
                   }
                   state_m0.position += pos_change;
@@ -985,7 +985,7 @@ void mc_control(client register_if reg, chanend flash_c) {
                     //state_m1.position -= pos_change;
                     printf("Motor 1 is opening. ");
                   } else {
-                    pos_change =  (int64_t) state_m1.opening_speed * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
+                    pos_change =  (int64_t) state_m1.closing_speed * POS_UPDATE_PERIOD_CYCLES / (XS1_TIMER_HZ); 
                     printf("Motor 1 is closing. ");
                   }
                   state_m1.position += pos_change;

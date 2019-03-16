@@ -2,7 +2,11 @@
 #define _common_h_
 
 #define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
-#define INFER_ENDSWITCHES_WITH_AC_SENSOR 1  
+#define INFER_ENDSWITCHES_WITH_AC_SENSOR 0
+#define ENDSWITCHES_CONNECTED 1
+
+#define ES_TRIGGERED 0 // GPIO value when Endswitch is triggered. Note: GPIO has pulldown
+#define BUTTON_PRESSED 1 // Button pressed. 
 
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
 #define ACCESS_ADC_VIA_SPI 1
@@ -33,7 +37,8 @@ typedef enum {
     POSITION_UNKNOWN,
     BOTH_ENDSWITCHES_ON,
     MOTOR_TOO_SLOW, 
-    MOTOR_TOO_FAST,     
+    MOTOR_TOO_FAST,  
+    NO_MOTOR_CURRENT   
 } motor_error_t;
 
 typedef enum {

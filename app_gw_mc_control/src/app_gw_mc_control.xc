@@ -34,6 +34,7 @@
 // Trigger Closed Endswitch whilst Motor is Closing: MOTOR_TOO_FAST error is correctly reported
 
 // Todo:
+// Use button on XMOS to reset Motor Error. 
 // Try to make sure that target_mp is always reached. Then the tolerances on the server can be set to 0.
 // Change relais control signals to active low. Relais inputs are pulled high on he releais so default (high) should mean off
 // Review duplicated state in motor_state_s and I2C registers.
@@ -67,8 +68,6 @@
 #include "spi_app.h"
 #include "dsp.h"
 
-#define ENDSWITCHES_CONNECTED 1
-
 // Note: Positions are calculated in micrometers so that integer speed can be tuned better.
 #define OPEN_POS_MIN MM_to_UM(0) // min position 
 #define CLOSED_POS_MAX MM_to_UM(1200)  // max position in um
@@ -94,9 +93,6 @@
 #define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES*20 // Update flash every 2 seconds
 
 #define LED_CYCLES (XS1_TIMER_HZ/10) // 100ms
-
-#define ES_TRIGGERED 0 // GPIO value when Endswitch is triggered. Note: GPIO has pulldown
-#define BUTTON_PRESSED 1 // Button pressed. 
 
 #define DEBUG_BUTTON_LOGIC 1
 
@@ -656,7 +652,7 @@ void update_motor_current_state(motor_state_s* ms) {
        ms->AC_current_hysteresis_counter++;
        if(ms->AC_current_hysteresis_counter > MOTOR_CURRENT_HYSTERESIS_PERIODS) {
           ms->AC_current_on = 0; 
-          printf("Changing AC current state to OFF for Motor %d\n", ms->motor_idx);
+          printf("Changing AC current state to OFF for Motor %d. RMS Current is %f A\n", ms->motor_idx, F16(rms_current_q16));
           ms->AC_current_hysteresis_counter = 0;
        }
     } else if(rms_current_q16 >= MOTOR_CURRENT_ON_THRESHOLD) {
@@ -667,7 +663,7 @@ void update_motor_current_state(motor_state_s* ms) {
        ms->AC_current_hysteresis_counter++;
        if(ms->AC_current_hysteresis_counter > MOTOR_CURRENT_HYSTERESIS_PERIODS) {
           ms->AC_current_on = 1;  
-          printf("Changing AC current state to ON for Motor %d\n", ms->motor_idx);
+          printf("Changing AC current state to ON for Motor %d. RMS Current is %f A\n", ms->motor_idx, F16(rms_current_q16));
           ms->AC_current_hysteresis_counter = 0;
        }
     } else if(rms_current_q16 <= MOTOR_CURRENT_OFF_THRESHOLD) {
@@ -684,7 +680,14 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
    if((current_time - ms->start_time)/POS_UPDATE_PERIOD_CYCLES > MOTOR_CURRENT_ON_PERIODS) {
       if(ms->AC_current_on) ms->detect_endswitches_from_AC_current = 1;
 
-      if(!ms->detect_endswitches_from_AC_current) printf("WARNING: Motor current sensor detected no current in Motor %d after it was switched on\n", ms->motor_idx);
+      if(!ms->detect_endswitches_from_AC_current) {
+        printf("WARNING: Motor current sensor detected no current in Motor %d after it was switched on\n", ms->motor_idx);
+        if(ms->error == NO_ERROR) {
+          ms->error = POSITION_UNKNOWN; // Todo: Re-use position unknown
+          update_error_state(ms, reg);
+        }
+      }
+
    }
 
    if(ms->detect_endswitches_from_AC_current) {
@@ -710,14 +713,19 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     timer tmr_pos;
     timer tmr_dbc; // debounce tiemr for p_control_buttons
-    timer tmr_dbc_es;  
 
-    int t_dbc, t_dbc_es, t_pos;  // time variables
+    int t_dbc, t_pos;  // time variables
 
     unsigned buttons_changed = 0;
-    unsigned endswitches_changed = 0;
+    unsigned prev_control_buttons_val;
 
-    unsigned prev_control_buttons_val, prev_endswitches_val;
+#if !INFER_ENDSWITCHES_WITH_AC_SENSOR
+    timer tmr_dbc_es;  
+    int t_dbc_es;
+    unsigned endswitches_changed = 0;
+    unsigned prev_endswitches_val;
+#endif
+
     unsigned led_val = 0;
 
     char mac_address[6];
@@ -805,10 +813,15 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     // Is this needed??
     p_control_buttons :> prev_control_buttons_val;
-    p_endswitches :> prev_endswitches_val;
 
-    unsigned endswitches_m0 = prev_endswitches_val & 0b11;
-    unsigned endswitches_m1 = (prev_endswitches_val >> 2) & 0b11;
+    unsigned endswitches_m0 = 0;
+    unsigned endswitches_m1 = 0;
+
+#if !INFER_ENDSWITCHES_WITH_AC_SENSOR
+    p_endswitches :> prev_endswitches_val;
+    endswitches_m0 = prev_endswitches_val & 0b11;
+    endswitches_m1 = (prev_endswitches_val >> 2) & 0b11;
+#endif
 
     // Init!!
     tmr_pos :> t_pos;  // init position update time

@@ -63,6 +63,9 @@ unsigned average_counter[NUM_ADC_CHANNELS];
 
 unsigned min_adc_val[NUM_ADC_CHANNELS] = {ADC_MAX, ADC_MAX};  
 unsigned max_adc_val[NUM_ADC_CHANNELS] = {ADC_MIN, ADC_MIN};  
+// Channel 0 has an issue with the ADC used on the second system
+// So this is a SW fix for a HW issue.
+unsigned used_adc_chans[NUM_ADC_CHANNELS] = {1, 2};
 
 #define GEN_ADC_VALUE 0
 
@@ -147,13 +150,14 @@ void spi_app(client spi_master_if spi)
 #if MEASURE_TIME
         measure_tmr :> t0;
 #endif
-        for(unsigned c=0; c<NUM_ADC_CHANNELS; ++c) {
-            adc_value[c] = read_mpc3008_adc_channel(spi, c, spi_clk_khz);
+        for(unsigned i=0; i<NUM_ADC_CHANNELS; ++i) {
+            unsigned c = used_adc_chans[i];
+            adc_value[i] = read_mpc3008_adc_channel(spi, c, spi_clk_khz);
 #if GEN_ADC_VALUE
-            adc_value[c] = adc_sine_values[average_counter[c]];
-            adc_value[c] >>= c; // shift by channel index to distinguish channels
+            adc_value[i] = adc_sine_values[average_counter[i]];
+            adc_value[i] >>= c; // shift by channel index to distinguish channels
 #endif
-            process_adc_value(c, adc_value[c]);
+            process_adc_value(i, adc_value[i]);
         }
 #if MEASURE_TIME
         measure_tmr :> t1;

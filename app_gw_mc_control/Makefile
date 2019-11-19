@@ -15,7 +15,11 @@ USED_MODULES = lib_i2c(>=4.0.0) lib_logging(>=2.1.0) lib_otpinfo lib_spi lib_dsp
 # XCC_XC_FLAGS, XCC_C_FLAGS, XCC_ASM_FLAGS, XCC_CPP_FLAGS
 # If the variable XCC_MAP_FLAGS is set it overrides the flags passed to
 # xcc for the final link (mapping) stage.
-XCC_FLAGS = -O2 -g -lquadflash -DDEBUG_PRINT_ENABLE=1 -report
+COMMON_FLAGS = -O2 -g -lquadflash -DDEBUG_PRINT_ENABLE=1 -report
+
+XCC_FLAGS_ES = $(COMMON_FLAGS)
+
+XCC_FLAGS_AC_sensor =  $(COMMON_FLAGS) -DINFER_ENDSWITCHES_WITH_AC_SENSOR=1
 
 # The XCORE_ARM_PROJECT variable, if set to 1, configures this
 # project to create both xCORE and ARM binaries.

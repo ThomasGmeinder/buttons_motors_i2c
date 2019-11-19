@@ -11,7 +11,7 @@ typedef enum {
 #define NUM_REGS_PER_MOTOR 6
 #define NUM_MOTORS 2
 #define NUM_MOTOR_REGISTERS (NUM_REGS_PER_MOTOR * NUM_MOTORS)
-#define NUM_REGISTERS NUM_MOTOR_REGISTERS+2 // +2 System Registers
+#define NUM_REGISTERS NUM_MOTOR_REGISTERS+3 // +3 System Registers
 
 #define MOTOR_STATE_REG_OFFSET 0
 #define MOTOR_TARGET_POS_REG_OFFSET 1
@@ -20,7 +20,7 @@ typedef enum {
 #define MOTOR_EVENT_REG_OFFSET 4
 #define MOTOR_ERROR_REG_OFFSET 5
 #define SYSTEM_ID_REG_OFFSET NUM_MOTOR_REGISTERS 
-
+#define SW_VERSION_REGISTER NUM_MOTOR_REGISTERS+2
 
 /*
  * Interface definition between user application and I2C slave register file

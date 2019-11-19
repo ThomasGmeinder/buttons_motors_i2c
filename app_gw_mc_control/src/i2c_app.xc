@@ -27,6 +27,7 @@ reg_access_t register_access[NUM_REGISTERS] = {
    R,  // 11   Motor 2 error reg
    R,  // 12   ID Register
    RW, // 13   Test Register
+   R,  // 14   SW Version Register
 };
 
 
@@ -43,6 +44,8 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
   uint8_t registers[NUM_REGISTERS];
   memset(registers, 0, NUM_REGISTERS*sizeof(uint8_t)); // Init regs to 0 to avoid errors from random values
   // Register,  I2C Access, Function
+
+  registers[SW_VERSION_REGISTER] = SW_VERSION;
 
   // Note: Status register is used to enable handshake between remote client and this program.
   // It is cleared only after the remote client read it to ensure that the event that the motor position was changed locally is not missed

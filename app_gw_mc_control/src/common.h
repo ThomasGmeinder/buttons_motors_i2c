@@ -1,6 +1,7 @@
 #ifndef _common_h_
 #define _common_h_
 
+#define SW_VERSION 2
 #define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
 #define INFER_ENDSWITCHES_WITH_AC_SENSOR 0
 #define ENDSWITCHES_CONNECTED 1

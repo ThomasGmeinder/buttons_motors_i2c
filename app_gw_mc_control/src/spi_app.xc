@@ -93,7 +93,8 @@ void process_adc_value(unsigned c, int adc_value) {
     min_adc_val[c]=ADC_MAX;  
     max_adc_val[c]=ADC_MIN; 
   }
-  if(c==0) xscope_float(CURRENT_RMS, F16(current_rms_q16[c]));
+  // xscope_float doesn't display correctly
+  if(c==0) xscope_int(CURRENT_RMS, current_rms_q16[c]);
 }
 
 

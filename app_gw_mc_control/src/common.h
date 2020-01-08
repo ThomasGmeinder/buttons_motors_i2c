@@ -2,21 +2,30 @@
 #define _common_h_
 
 #define SW_VERSION 2
-#define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
-#define INFER_ENDSWITCHES_WITH_AC_SENSOR 0
-#define ENDSWITCHES_CONNECTED 1
 
-#define ES_TRIGGERED 0 // GPIO value when Endswitch is triggered. Note: GPIO has pulldown
+#define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
+
+#ifndef INFER_ENDSWITCHES_WITH_AC_SENSOR
+#define INFER_ENDSWITCHES_WITH_AC_SENSOR 0
+#endif
+#ifndef ENDSWITCHES_CONNECTED
+#define ENDSWITCHES_CONNECTED 1
+#endif 
+
+//define ES_TRIGGERED 0 // GPIO value when Endswitch is triggered (disconnected). Note: GPIO has pulldown
+#define ES_TRIGGERED 1 // GPIO value when Endswitch is triggered (connected). Note: GPIO has pulldown
 #define BUTTON_PRESSED 1 // Button pressed. 
+
+#define ENABLE_INTERNAL_PULLS 1
 
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
 #define ACCESS_ADC_VIA_SPI 1
 #define NUM_ADC_CHANNELS 2
 #define MOTOR_CURRENT_OFF_THRESHOLD Q16(0.1) // 100 mA
 #define MOTOR_CURRENT_ON_THRESHOLD Q16(0.2) // 200 mA
-#define MOTOR_CURRENT_HYSTERESIS_PERIODS 5 // 5 * 100ms = 0.5s
+#define MOTOR_CURRENT_HYSTERESIS_PERIODS 2 // 2 * 100ms = 0.2s
 // Todo: Fix time to ref clock cycles not update periods
-#define MOTOR_CURRENT_ON_PERIODS MOTOR_CURRENT_HYSTERESIS_PERIODS + 1 // time until mutor current must be detected
+#define MOTOR_CURRENT_SWITCH_PERIODS MOTOR_CURRENT_HYSTERESIS_PERIODS * 8 // time until mutor current on/off must be detected
 #endif
 
 typedef enum {
@@ -74,7 +83,7 @@ typedef struct {
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
     unsigned AC_current_hysteresis_counter;
     unsigned AC_current_on;
-    unsigned detect_endswitches_from_AC_current;
+    unsigned AC_current_on_flag;
 #endif
 
 } motor_state_s;

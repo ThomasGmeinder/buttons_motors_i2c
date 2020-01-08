@@ -18,6 +18,7 @@ USED_MODULES = lib_i2c(>=4.0.0) lib_logging(>=2.1.0) lib_otpinfo lib_spi lib_dsp
 COMMON_FLAGS = -O2 -g -lquadflash -DDEBUG_PRINT_ENABLE=1 -report
 
 XCC_FLAGS_ES = $(COMMON_FLAGS)
+XCC_FLAGS_ES_nc = $(COMMON_FLAGS) -DENDSWITCHES_CONNECTED=0 # just for testing (initialisation after xflash in absense of endswitches)
 
 XCC_FLAGS_AC_sensor =  $(COMMON_FLAGS) -DINFER_ENDSWITCHES_WITH_AC_SENSOR=1
 

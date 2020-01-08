@@ -16,7 +16,7 @@
 // Note: When a I2C command comes in from the server whilst the motor is running, then ignore it
 
 /************* Flash firmware ********************/
-// Flash with 8k Datapartition: xflash bin/app_gw_mc_control.xe --boot-partition-size 516096
+// Flash with 8k Datapartition: xflash <chosen .xe file> --boot-partition-size 516096
 
 /************* Test Protocol *********************/
 // Switch both Endswitches on: 
@@ -72,23 +72,23 @@
 #define OPEN_POS_MIN MM_to_UM(0) // min position 
 #define CLOSED_POS_MAX MM_to_UM(1200)  // max position in um
 
-// Measured times:
-// Opening: 76 seconds
-// opening speed: 15789 um/s 
-
-// Closing: 77 seconds
-// closing speed: 15584 um/s
-
 #define OPEN_POS_ES OPEN_POS_MIN  // Open position at Endswitch
 #define CLOSED_POS_ES CLOSED_POS_MAX
 
 #define DISTANCE_BETWEEN_ES = CLOSED_POS_ES-OPEN_POS_ES
 
-#define OPEN_TOLERANCE MM_to_UM(10)   // 10 mm tolerance
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+// increase the tolerance. There is a delay of 1.2 seconds until off is detected
+#define OPEN_TOLERANCE MM_to_UM(30)  
+#define CLOSED_TOLERANCE MM_to_UM(30) 
+#else
+// Endswitches are connected directly and will be detected after 100ms 
+#define OPEN_TOLERANCE MM_to_UM(10)   
 #define CLOSED_TOLERANCE MM_to_UM(10) 
+#endif
 
 #define DEBOUNCE 1
-// 250ms are needed because wwitching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
+// 250ms are needed because switching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
 #define DEBOUNCE_TIME XS1_TIMER_HZ/4  
 #define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES*20 // Update flash every 2 seconds
 
@@ -344,12 +344,12 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos,
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
     ms->AC_current_hysteresis_counter = 0;
     ms->AC_current_on = 0;
-    ms->detect_endswitches_from_AC_current = 0;
+    ms->AC_current_on_flag = 0;
 #endif
 
 #if !INFER_ENDSWITCHES_WITH_AC_SENSOR && ENDSWITCHES_CONNECTED
     // Check endswitches and compare with position read from flash
-    check_endswitches_and_update_states(endswitches_val, ms, reg, 1);
+    check_endswitches_and_update_states(endswitches_val, ms, reg);
 #endif
 }
 
@@ -364,9 +364,12 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
      #if ENDSWITCHES_CONNECTED
        if(ms->target_position >= CLOSED_POS_ES) { // Target position is at Closed Endswitch
          // Endswitch should stop the motor. Double heck here based on  
-         if(ms->position >= ms->target_position + CLOSED_TOLERANCE) {
+         if(ms->position > ms->target_position + CLOSED_TOLERANCE) {
            printf("Closing ventilation %d: current position %d exceeded Endswith position %d by %d mm. Motor slower than expected or Closed Endswitch is not working. Emergency motor stop!\n"\
             , ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position), UM_to_MM(CLOSED_TOLERANCE));
+           // fix position. This is key to avoid range error. 
+           ms->position = ms->target_position + CLOSED_TOLERANCE;
+
            stop_motor(ms, reg);
            update_error_state(ms, reg, MOTOR_TOO_SLOW);
            
@@ -551,6 +554,15 @@ void update_pushbutton_leds(motor_state_s* ms) {
 }
 
 void stop_motor(motor_state_s* ms, client register_if reg) {
+    timer tmr;
+
+    tmr :> ms->stop_time; 
+
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+    // reset the flag. 
+    ms->AC_current_on_flag = 0;
+#endif 
+
     if(ms->motor_idx == 0) {
       p_m0_on <: MOTOR_OFF;
     } else {
@@ -577,11 +589,6 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
   timer tmr;
 
   tmr :> ms->start_time;
-
-#if INFER_ENDSWITCHES_WITH_AC_SENSOR
-  // reset the flag
-  ms->detect_endswitches_from_AC_current = 0;
-#endif 
 
   ms->actuator = actuator;
 
@@ -638,27 +645,30 @@ int motor_moved_by_button(motor_state_s* ms, client register_if reg) {
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
 void update_motor_current_state(motor_state_s* ms) {
   int32_t rms_current_q16 = get_rms_current(ms->motor_idx);
+  //printf("Irms Motor %d: %f\n",ms->motor_idx,F16(rms_current_q16));
   //printf("update_motor_current_state: Motor %d, AC_current_on %d, rms_current %.2f A\n", ms->motor_idx, ms->AC_current_on, F16(rms_current_q16));
   if(ms->AC_current_on) {
     if(rms_current_q16 <= MOTOR_CURRENT_OFF_THRESHOLD) {
        ms->AC_current_hysteresis_counter++;
        if(ms->AC_current_hysteresis_counter > MOTOR_CURRENT_HYSTERESIS_PERIODS) {
-          ms->AC_current_on = 0; 
           printf("Changing AC current state to OFF for Motor %d. RMS Current is %f A\n", ms->motor_idx, F16(rms_current_q16));
+          ms->AC_current_on = 0; 
           ms->AC_current_hysteresis_counter = 0;
        }
     } else if(rms_current_q16 >= MOTOR_CURRENT_ON_THRESHOLD) {
+       //printf("Motor %d rms_current_q16 >= MOTOR_CURRENT_ON_THRESHOLD when looking for OFF condition. Resetting AC_current_hysteresis_counter\n",ms->motor_idx);
        ms->AC_current_hysteresis_counter = 0; 
     }
   } else if(!ms->AC_current_on) {
     if(rms_current_q16 >= MOTOR_CURRENT_ON_THRESHOLD) {
        ms->AC_current_hysteresis_counter++;
        if(ms->AC_current_hysteresis_counter > MOTOR_CURRENT_HYSTERESIS_PERIODS) {
-          ms->AC_current_on = 1;  
           printf("Changing AC current state to ON for Motor %d. RMS Current is %f A\n", ms->motor_idx, F16(rms_current_q16));
+          ms->AC_current_on = 1;  
           ms->AC_current_hysteresis_counter = 0;
        }
     } else if(rms_current_q16 <= MOTOR_CURRENT_OFF_THRESHOLD) {
+       //printf("Motor %d rms_current_q16 <= MOTOR_CURRENT_OFF_THRESHOLD when looking for ON condition. Resetting AC_current_hysteresis_counter\n",ms->motor_idx);
        ms->AC_current_hysteresis_counter = 0; 
     }
   }
@@ -669,32 +679,52 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
    int current_time;
    tmr :> current_time;
 
-   if((current_time - ms->start_time)/POS_UPDATE_PERIOD_CYCLES > MOTOR_CURRENT_ON_PERIODS) {
-      if(ms->AC_current_on) ms->detect_endswitches_from_AC_current = 1;
+// Todo: Review clearing of severity 0 errors beause system can restart !!!!
 
-      if(!ms->detect_endswitches_from_AC_current) {
-        printf("WARNING: Motor current sensor detected no current in Motor %d after it was switched on\n", ms->motor_idx);
-        if(ms->error == NO_ERROR) {
-          ms->error = POSITION_UNKNOWN; // Todo: Re-use position unknown
-          update_error_state(ms, reg);
-        }
-      }
+   if(ms->error == NO_ERROR) {
+       if(ms->state == OPENING || ms->state == CLOSING) {
+         if((current_time - ms->start_time)/POS_UPDATE_PERIOD_CYCLES > MOTOR_CURRENT_SWITCH_PERIODS) {
+            // make sure motor current has time to switch on
+    
+            if(ms->AC_current_on) {
+               ms->AC_current_on_flag = 1; // set the flag  
+            }
 
-   }
+            if(ms->AC_current_on_flag && !ms->AC_current_on) {
+              // current was detected after motor was switched on.
+              // Now detect when Endswitch is switching current back off
+              if(ms->state == OPENING) {
+                 printf("Motor %d Current was switched off whilst Opening -> Open Endswitch triggered\n", ms->motor_idx);
+                 unsigned mimick_endswitch_value = ES_TRIGGERED == 1 ? ENDSWITCH_OPEN : (~ENDSWITCH_OPEN)&0x3; 
+                 check_endswitches_and_update_states(mimick_endswitch_value, ms, reg);
+                 ms->AC_current_on_flag = 0;  // reset
+              } else if(ms->state == CLOSING) {
+                 printf("Motor %d Current was switched off whilst Closing -> Closed Endswitch triggered\n", ms->motor_idx);
+                 unsigned mimick_endswitch_value = ES_TRIGGERED == 1 ? ENDSWITCH_CLOSED : (~ENDSWITCH_CLOSED)&0x3; 
+                 check_endswitches_and_update_states(mimick_endswitch_value, ms, reg);
+                 ms->AC_current_on_flag = 0;  // reset
+              }
+            } else if (!ms->AC_current_on) {
+               printf("ERROR: Motor %d should be running but no AC current was detected\n\n", ms->motor_idx);
+               stop_motor(ms, reg);
+               update_error_state(ms, reg, POSITION_UNKNOWN);
+            }
+          }
+       }
 
-   if(ms->detect_endswitches_from_AC_current) {
-     // current was detected after motor was switched on.
-     // Now detect when Endswitch is switching current back off
-     if(ms->state == OPENING && !ms->AC_current_on) {
-        printf("Motor %d Current was switched off whilst Opening -> Open Endswitch triggered\n", ms->motor_idx);
-        unsigned mimick_endswitch_value = ES_TRIGGERED == 1 ? ENDSWITCH_OPEN : (~ENDSWITCH_OPEN)&0x3; 
-        check_endswitches_and_update_states(mimick_endswitch_value, ms, reg, 0);
-     } else if(ms->state == CLOSING && !ms->AC_current_on) {
-        printf("Motor %d Current was switched off whilst Closing -> Closed Endswitch triggered\n", ms->motor_idx);
-        unsigned mimick_endswitch_value = ES_TRIGGERED == 1 ? ENDSWITCH_CLOSED : (~ENDSWITCH_CLOSED)&0x3; 
-        check_endswitches_and_update_states(mimick_endswitch_value, ms, reg, 0);
-     }
-   }
+       if(ms->state == STOPPED) {
+           // Motor is stopped. Make sure current is off
+           if((current_time - ms->stop_time)/POS_UPDATE_PERIOD_CYCLES > MOTOR_CURRENT_SWITCH_PERIODS) {
+             // make sure motor current has time to switch on
+             if(ms->AC_current_on) {
+                printf("WARNING: Motor current sensor detected current in Motor %d after it was switched off!\n", ms->motor_idx);
+                stop_motor(ms, reg);
+                update_error_state(ms, reg, POSITION_UNKNOWN);
+                
+             }
+           }
+       }
+    }
 }
 #endif
 
@@ -709,7 +739,7 @@ void mc_control(client register_if reg, chanend flash_c) {
     int t_dbc, t_pos;  // time variables
 
     unsigned buttons_changed = 0;
-    unsigned prev_control_buttons_val;
+    unsigned prev_control_buttons_val, control_buttons_val_before_change;
 
 #if !INFER_ENDSWITCHES_WITH_AC_SENSOR
     timer tmr_dbc_es;  
@@ -734,18 +764,19 @@ void mc_control(client register_if reg, chanend flash_c) {
 
 
 #if ENABLE_INTERNAL_PULLS
+    // Enable pull resistors to make signals de-asserted by default
     #if ES_TRIGGERED==1
       // enable internal pulldowns for high active signals
       set_port_pull_down(p_endswitches);
     #else 
-      // enable internal pulldowns for low active 
+      // enable internal pullups for low active 
       set_port_pull_up(p_endswitches);
     #endif
     #if BUTTON_PRESSED==1
       // enable internal pulldowns for high active signals
       set_port_pull_down(p_control_buttons);
     #else 
-      // enable internal pulldowns for low active 
+      // enable internal pullups for low active 
       set_port_pull_up(p_control_buttons);
     #endif
 #endif
@@ -780,7 +811,7 @@ void mc_control(client register_if reg, chanend flash_c) {
       #if !ENDSWITCHES_CONNECTED || INFER_ENDSWITCHES_WITH_AC_SENSOR
       else {
         m0_pos = CLOSED_POS_ES;
-        printf("Endswitches not connected. Initialising Motor 0 to arbitrary position %d mm\n", UM_to_MM(m0_pos));
+        printf("Initialising Motor 0 to arbitrary position %d mm\n", UM_to_MM(m0_pos));
       }
       #endif
     
@@ -797,7 +828,7 @@ void mc_control(client register_if reg, chanend flash_c) {
       #if !ENDSWITCHES_CONNECTED || INFER_ENDSWITCHES_WITH_AC_SENSOR
       else {
         m1_pos = CLOSED_POS_ES;
-        printf("Endswitches not connected. Initialising Motor 1 to arbitrary position %d mm\n", UM_to_MM(m1_pos));
+        printf("Initialising Motor 1 to arbitrary position %d mm\n", UM_to_MM(m1_pos));
       }
       #endif
     }
@@ -805,6 +836,7 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     // Is this needed??
     p_control_buttons :> prev_control_buttons_val;
+    control_buttons_val_before_change = prev_control_buttons_val;
 
     unsigned endswitches_m0 = 0;
     unsigned endswitches_m1 = 0;
@@ -818,9 +850,11 @@ void mc_control(client register_if reg, chanend flash_c) {
     // Init!!
     tmr_pos :> t_pos;  // init position update time
 
-    init_motor_state(&state_m0, reg, m0_pos, 15800, 15600, endswitches_m0, 0, t_pos);
+    // M1 opening speed: 123cm / 75s = 1.23e6 um / 75s = 16400
+    // M1 closing speed: 123cm / 75s = 1.23e6 um / 77s = 15975
+    init_motor_state(&state_m0, reg, m0_pos, 16400, 15974, endswitches_m0, 0, t_pos);
     init_regs(&state_m0, reg);
-    init_motor_state(&state_m1, reg, m1_pos, 15800, 15600, endswitches_m1, 1, t_pos);
+    init_motor_state(&state_m1, reg, m1_pos, 16400, 15974, endswitches_m1, 1, t_pos);
     init_regs(&state_m1, reg);
 
     while(1) {
@@ -890,12 +924,14 @@ void mc_control(client register_if reg, chanend flash_c) {
               if(control_buttons_val == prev_control_buttons_val) { // The button change persistet -> No glitch
                 unsigned control_buttons_m0 = control_buttons_val & 0b11;
                 unsigned control_buttons_m1 = (control_buttons_val >> 2) & 0b11;
-                printf("Motor Control Buttons changed to value 0x%x\n", control_buttons_val);
+                printf("Motor Control Buttons changed from 0x%x to 0x%x\n", control_buttons_val_before_change, control_buttons_val);
                 check_control_buttons_and_update_states(control_buttons_m0, &state_m0, reg); 
                 check_control_buttons_and_update_states(control_buttons_m1, &state_m1, reg); 
 
+                control_buttons_val_before_change = control_buttons_val;
               } else {
                 if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                prev_control_buttons_val = control_buttons_val; //prevent that glitch going away causes new pinsneq event
               }
               break;
 

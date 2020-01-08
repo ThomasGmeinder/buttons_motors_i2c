@@ -23,8 +23,6 @@ typedef enum {
     OPENING,
     CLOSING,
     STOPPED,
-    STATE_UNKNOWN,
-    ERROR
 } motor_state_t;
 
 typedef enum {
@@ -33,13 +31,13 @@ typedef enum {
 } actuator_t;
 
 // Todo: Maybe separate MOTOR_TOO_SLOW and MOTOR_TOO_FAST into a warning register
+// Errors with severity
 typedef enum {
-    NO_ERROR,
-    POSITION_UNKNOWN,
-    BOTH_ENDSWITCHES_ON,
-    MOTOR_TOO_SLOW, 
-    MOTOR_TOO_FAST,  
-    NO_MOTOR_CURRENT   
+    NO_ERROR, // 0
+    POSITION_UNKNOWN, // 1
+    BOTH_ENDSWITCHES_ON, // 1
+    MOTOR_TOO_SLOW, // 0
+    MOTOR_TOO_FAST, // 0
 } motor_error_t;
 
 typedef enum {
@@ -57,6 +55,7 @@ typedef struct {
     actuator_t actuator;
 
     int start_time;
+    int stop_time;
 
     motor_state_t state;
     motor_error_t error;

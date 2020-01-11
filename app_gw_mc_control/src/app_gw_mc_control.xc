@@ -137,14 +137,14 @@ on MC_TILE : in port p_control_buttons = XS1_PORT_4D;  // X0D16, X0D17, X0D18, X
  
 /** Outputs **/
 // Motor 0 on/off
-on MC_TILE : out port p_m0_on = XS1_PORT_1F;  // X0D13 ()
+on MC_TILE : out port p_m0_on = XS1_PORT_1F;  // X0D13
 // Motor 0 direction
-on MC_TILE : out port p_m0_dir = XS1_PORT_1E;  // X0D12 ()
+on MC_TILE : out port p_m0_dir = XS1_PORT_1E;  // X0D12
 
 // Motor 1 on/off
-on MC_TILE : out port p_m1_on = XS1_PORT_1G;  // X0D22 ()
+on MC_TILE : out port p_m1_on = XS1_PORT_1H;  // X0D23
 // Motor 1 direction
-on MC_TILE : out port p_m1_dir = XS1_PORT_1H;  // X0D23 ()
+on MC_TILE : out port p_m1_dir = XS1_PORT_1G;  // X0D22
 
 on MC_TILE : port p_slave_sda = XS1_PORT_1M; // X0D36 // connect to GPIO 3 on rPI
 on MC_TILE : port p_slave_scl = XS1_PORT_1N; // X0D37 // connect to GPIO 2 on rPI

@@ -12,8 +12,9 @@
 #define ENDSWITCHES_CONNECTED 1
 #endif 
 
-//define ES_TRIGGERED 0 // GPIO value when Endswitch is triggered (disconnected). Note: GPIO has pulldown
-#define ES_TRIGGERED 1 // GPIO value when Endswitch is triggered (connected). Note: GPIO has pulldown
+// GPIO value when Endswitch is triggered. Note: GPIO has pulldown
+#define ES_TRIGGERED 0 // Endswitch disconnects from VCC.
+//#define ES_TRIGGERED 1 // Endswitch connects to VCC.
 #define BUTTON_PRESSED 1 // Button pressed. 
 
 #define ENABLE_INTERNAL_PULLS 1

@@ -1,25 +1,22 @@
 #ifndef _common_h_
 #define _common_h_
 
-#define SW_VERSION 2
+
+#if INFER_ENDSWITCHES_WITH_AC_SENSOR
+#define SW_VERSION 20  // version 2.0
+#else
+#define SW_VERSION 13  // version 1.3
+#endif
 
 #define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
 
 #ifndef INFER_ENDSWITCHES_WITH_AC_SENSOR
 #define INFER_ENDSWITCHES_WITH_AC_SENSOR 0
 #endif
-#ifndef ENDSWITCHES_CONNECTED
-#define ENDSWITCHES_CONNECTED 1
-#endif 
-
-// GPIO value when Endswitch is triggered. Note: GPIO has pulldown
-#define ES_TRIGGERED 0 // Endswitch disconnects from VCC.
-//#define ES_TRIGGERED 1 // Endswitch connects to VCC.
-#define BUTTON_PRESSED 1 // Button pressed. 
-
-#define ENABLE_INTERNAL_PULLS 1
 
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
+#define ENDSWITCHES_ACTIVE 1 // Endswitches are active in the system but not connected directly
+#define ENDSWITCHES_CONNECTED 0
 #define ACCESS_ADC_VIA_SPI 1
 #define NUM_ADC_CHANNELS 2
 #define MOTOR_CURRENT_OFF_THRESHOLD Q16(0.1) // 100 mA
@@ -28,6 +25,21 @@
 // Todo: Fix time to ref clock cycles not update periods
 #define MOTOR_CURRENT_SWITCH_PERIODS MOTOR_CURRENT_HYSTERESIS_PERIODS * 8 // time until mutor current on/off must be detected
 #endif
+
+#ifndef ENDSWITCHES_CONNECTED
+#define ENDSWITCHES_CONNECTED 1
+#endif 
+
+#if ENDSWITCHES_CONNECTED
+#define ENDSWITCHES_ACTIVE 1 // Endswitches are active in the system
+#endif
+
+// GPIO value when Endswitch is triggered. Note: GPIO has pulldown
+#define ES_TRIGGERED 0 // Endswitch disconnects from VCC.
+//#define ES_TRIGGERED 1 // Endswitch connects to VCC.
+#define BUTTON_PRESSED 1 // Button pressed. 
+
+#define ENABLE_INTERNAL_PULLS 1
 
 typedef enum {
     OPENING,

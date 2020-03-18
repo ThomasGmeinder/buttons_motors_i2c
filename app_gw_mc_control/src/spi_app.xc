@@ -131,7 +131,7 @@ void spi_app(client spi_master_if spi)
 
     const unsigned spi_clk_khz = 1000;
     printstrln("Starting SPI access");
-    delay_microseconds(100);
+    delay_microseconds(1000); // delay to avoid that the below print is mixed with prints other tasks
 
     printf("Reading all available ADC channels for testing:\n");
     for(unsigned c=0; c<8; ++c) {

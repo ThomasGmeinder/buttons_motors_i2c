@@ -256,7 +256,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
      ms->position = OPEN_POS_ES;
-     ms->target_position = ms->position;
+     ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position
      stop_motor(ms, reg);
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
      printf("Motor %d closed endswitch triggered\n", ms->motor_idx);
@@ -266,7 +266,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
      ms->state = STOPPED;
      ms->actuator = BUTTON; 
      ms->position = CLOSED_POS_ES;
-     ms->target_position = ms->position;
+     ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position
      stop_motor(ms, reg);
    };
 
@@ -361,9 +361,9 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    if(ms->state == CLOSING) {
      // Todo: Fix this. 
      // It has to work like this: Tune speed estimation slightly slower than motor so that Endswitch can trigger before motor is stopped based on postion calulation
-     #if ENDSWITCHES_CONNECTED
+     #if ENDSWITCHES_ACTIVE
        if(ms->target_position >= CLOSED_POS_ES) { // Target position is at Closed Endswitch
-         // Endswitch should stop the motor. Double heck here based on  
+         // Endswitch should stop the motor. Check this here
          if(ms->position > ms->target_position + CLOSED_TOLERANCE) {
            printf("Closing ventilation %d: current position %d exceeded Endswith position %d by %d mm. Motor slower than expected or Closed Endswitch is not working. Emergency motor stop!\n"\
             , ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position), UM_to_MM(CLOSED_TOLERANCE));
@@ -392,8 +392,9 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
 
    } 
    if(ms->state == OPENING) {
-     #if ENDSWITCHES_CONNECTED
+     #if ENDSWITCHES_ACTIVE
        if(ms->target_position <= OPEN_POS_ES) { // Target position is at Open Endswitch, 
+         // Endswitch should stop the motor. Check this here
          if(ms->position < ms->target_position - OPEN_TOLERANCE) {
            printf("Opening ventilation %d: current position %d exceeded Endswith position %d by %d mm. Motor slower than expected or Open Endswitch is not working. Emergency motor stop!\n"\
             , ms->motor_idx, UM_to_MM(ms->position), UM_to_MM(ms->target_position), UM_to_MM(OPEN_TOLERANCE));
@@ -684,15 +685,19 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
    if(ms->error == NO_ERROR) {
        if(ms->state == OPENING || ms->state == CLOSING) {
          if((current_time - ms->start_time)/POS_UPDATE_PERIOD_CYCLES > MOTOR_CURRENT_SWITCH_PERIODS) {
-            // make sure motor current has time to switch on
     
             if(ms->AC_current_on) {
                ms->AC_current_on_flag = 1; // set the flag  
             }
 
             if(ms->AC_current_on_flag && !ms->AC_current_on) {
-              // current was detected after motor was switched on.
-              // Now detect when Endswitch is switching current back off
+              // Motor current was switched off whilst running.
+              // This was done by the Endswitch.
+              // There is a natural delay between the Endswitch triggering and this event being detected with the AC current.
+              // Note: This logic interacts with check_and_handle_new_pos which will stop the Motor 
+              // When the position is outside of a tolerance range.
+              // OPEN_TOLERANCE and CLOSED_TOLERANCE must be tuned in a way that this detection logic has enough time to detect that
+              // the current was switched off
               if(ms->state == OPENING) {
                  printf("Motor %d Current was switched off whilst Opening -> Open Endswitch triggered\n", ms->motor_idx);
                  unsigned mimick_endswitch_value = ES_TRIGGERED == 1 ? ENDSWITCH_OPEN : (~ENDSWITCH_OPEN)&0x3; 
@@ -806,14 +811,12 @@ void mc_control(client register_if reg, chanend flash_c) {
           printf("Error: Position in flash is out of range for Motor 0: %d um\n", m0_pos);
           m0_pos = INT_MIN;
         }
-
       } 
-      #if !ENDSWITCHES_CONNECTED || INFER_ENDSWITCHES_WITH_AC_SENSOR
-      else {
+      else if(!ENDSWITCHES_CONNECTED) {
+        // Initial position cannot be derived from Endswitches.
         m0_pos = CLOSED_POS_ES;
         printf("Initialising Motor 0 to arbitrary position %d mm\n", UM_to_MM(m0_pos));
       }
-      #endif
     
       // Init Motor 1 position
       if(byte_buffer[MOTOR_FLASH_AREA_SIZE] == FLASH_DATA_VALID_BYTE) {
@@ -825,12 +828,11 @@ void mc_control(client register_if reg, chanend flash_c) {
           m1_pos = INT_MIN;
         }
       } 
-      #if !ENDSWITCHES_CONNECTED || INFER_ENDSWITCHES_WITH_AC_SENSOR
-      else {
+      else if(!ENDSWITCHES_CONNECTED) {
+        // Initial position cannot be derived from Endswitches.
         m1_pos = CLOSED_POS_ES;
         printf("Initialising Motor 1 to arbitrary position %d mm\n", UM_to_MM(m1_pos));
       }
-      #endif
     }
 
 

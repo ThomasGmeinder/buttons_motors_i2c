@@ -9,7 +9,7 @@ TARGET = XCORE-200-EXPLORER
 APP_NAME = app_gw_mc_control
 
 # The USED_MODULES variable lists other module used by the application.
-USED_MODULES = lib_i2c(>=4.0.0) lib_logging(>=2.1.0) lib_otpinfo lib_spi lib_dsp
+USED_MODULES = lib_i2c(>=4.0.0) lib_logging lib_otpinfo lib_spi lib_dsp
 # The flags passed to xcc when building the application
 # You can also set the following to override flags for a particular language:
 # XCC_XC_FLAGS, XCC_C_FLAGS, XCC_ASM_FLAGS, XCC_CPP_FLAGS

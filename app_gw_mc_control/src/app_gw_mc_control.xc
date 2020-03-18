@@ -18,7 +18,7 @@
 /************* Flash firmware ********************/
 // Flash with 8k Datapartition: xflash <chosen .xe file> --boot-partition-size 516096
 
-/************* Test Protocol *********************/
+/************* Test Protocol for ES configuration *********************/
 // Switch both Endswitches on: 
 //   BOTH_ENDSWITCHES_ON is correctly flagged via I2C and displayed in Browser
 //   Both Buttons light up red
@@ -33,25 +33,19 @@
 // Trigger Closed Endswitch whilst Motor is Opening: POSITION_UNKNOWN error is correctly reported. Can be cleeared by triggering Endswitch again.
 // Trigger Closed Endswitch whilst Motor is Closing: MOTOR_TOO_FAST error is correctly reported
 
-// Todo:
-// Use button on XMOS to reset Motor Error. 
+/************* Test Protocol for AC_sensor configuration *********************/
+// For each motor:
+// Open/close ventilation with motor disconnected. POSITION_UNKNOWN error should occur 
+// Open/close ventilation with motor connected. Disconnect motor whilst running. The controller shall interpret this as endswitch triggered. Error MOTOR_TOO_FAST shall be displayed in the browser.
+// close ventilation until closed endswitch is reached. If endswitch is triggered earlier than expected MOTOR_TOO_FAST shall be displayed in the browser.
+// open ventilation until open endswitch is reached. If endswitch is triggered earlier than expected MOTOR_TOO_FAST shall be displayed in the browser.
+// Note: When POSITION_UNKNOWN error (or other severity > 0 errors) occur, both push buttons light up red and the error kind is reported in the browser
+// Clear severity > 0 error: Press SW1. This shall clear the error and reset to position CLOSED_POS_ES. Red LEDs in buttons shall be switched off and error in browser shall disappear
+
+/************* Todo *********************/
 // Try to make sure that target_mp is always reached. Then the tolerances on the server can be set to 0.
 // Change relais control signals to active low. Relais inputs are pulled high on he releais so default (high) should mean off
 // Review duplicated state in motor_state_s and I2C registers.
-// Write a spec for updates of the states based on the actions above
-// Currently the control logic on sever and client is based on target_mp, server_target_mp, current_mp. Is this sufficient state?
-// php logic:
-// read current_mp
-// read server_target_mp
-// if(current_mp != server_target_mp) {
-//   // Button change takes priority
-//   target_mp = server_target_mp;
-// } 
-// else if(current_mp != target_mp) {
-//   // Client changed state. 
-//   I2C_write(target_position_reg, target_mp);
-// }
-// return target_mp and current_mp to client
 
 #include <platform.h>
 #include <stdio.h>
@@ -127,10 +121,14 @@
 
 /** Inputs **/
 // Endswitches for both Motors
-on MC_TILE : in port p_endswitches = XS1_PORT_4C;   // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
+#if ENDSWITCHES_CONNECTED
 // Motor 0: bits 1:0
 // Motor 1: bits 3:2
-//on MC_TILE : in port p_endswitches = XS1_PORT_4E;  
+on MC_TILE : in port p_endswitches = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33 
+#else 
+// access SW1 on the board.
+on MC_TILE : in port p_error_buttons = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33 
+#endif 
 
 // Button to open and close the ventilations
 on MC_TILE : in port p_control_buttons = XS1_PORT_4D;  // X0D16, X0D17, X0D18, X0D19
@@ -152,7 +150,7 @@ on MC_TILE : port p_slave_scl = XS1_PORT_1N; // X0D37 // connect to GPIO 2 on rP
 on MC_TILE : port p_led = XS1_PORT_4F;
 
 on MC_TILE : port p_m0_pushbutton_leds = XS1_PORT_4A; // X0D02, X0D03, X0D08, X0D09
-on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33
+on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4C; // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
 
 on MC_TILE: otp_ports_t otp_ports = OTP_PORTS_INITIALIZER;
 
@@ -190,7 +188,7 @@ int error_severity(motor_error_t err) {
 
 // Functions
 unsigned bit_set(unsigned bit_index, unsigned portval) {
-  return ((portval >> bit_index) & 1) == BUTTON_PRESSED;
+  return ((portval >> bit_index) & 1) == CONTROL_BUTTON_PRESSED;
 }
 
 unsigned position_in_range(int position) {
@@ -733,6 +731,16 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
 }
 #endif
 
+void clear_error_and_reset_position(motor_state_s* ms, client register_if reg) {
+  if(ms->error != NO_ERROR) {
+    printf("Clearing Error for Motor %d and resetting position to CLOSED_POS_ES %d\n",ms->motor_idx,UM_to_MM(CLOSED_POS_ES));
+    ms->position = CLOSED_POS_ES;
+    ms->target_position = ms->position;
+    update_position_regs(ms, reg);
+    update_error_state(ms, reg, NO_ERROR);
+  }
+}
+
 // global shared memory
 motor_state_s state_m0, state_m1;
 
@@ -740,13 +748,17 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     timer tmr_pos;
     timer tmr_dbc; // debounce tiemr for p_control_buttons
+    timer tmr_dbc_errors;
 
-    int t_dbc, t_pos;  // time variables
+    int t_dbc, t_dbc_errors, t_pos;  // time variables
 
-    unsigned buttons_changed = 0;
+    unsigned control_buttons_changed = 0;
     unsigned prev_control_buttons_val, control_buttons_val_before_change;
 
-#if !INFER_ENDSWITCHES_WITH_AC_SENSOR
+    unsigned error_buttons_changed = 0;
+    unsigned prev_error_buttons_val, error_buttons_val_before_change;
+
+#if ENDSWITCHES_CONNECTED
     timer tmr_dbc_es;  
     int t_dbc_es;
     unsigned endswitches_changed = 0;
@@ -769,6 +781,8 @@ void mc_control(client register_if reg, chanend flash_c) {
 
 
 #if ENABLE_INTERNAL_PULLS
+
+  #if ENDSWITCHES_CONNECTED
     // Enable pull resistors to make signals de-asserted by default
     #if ES_TRIGGERED==1
       // enable internal pulldowns for high active signals
@@ -777,7 +791,8 @@ void mc_control(client register_if reg, chanend flash_c) {
       // enable internal pullups for low active 
       set_port_pull_up(p_endswitches);
     #endif
-    #if BUTTON_PRESSED==1
+  #endif
+    #if CONTROL_BUTTON_PRESSED==1
       // enable internal pulldowns for high active signals
       set_port_pull_down(p_control_buttons);
     #else 
@@ -811,6 +826,7 @@ void mc_control(client register_if reg, chanend flash_c) {
           printf("Error: Position in flash is out of range for Motor 0: %d um\n", m0_pos);
           m0_pos = INT_MIN;
         }
+
       } 
       else if(!ENDSWITCHES_CONNECTED) {
         // Initial position cannot be derived from Endswitches.
@@ -908,18 +924,18 @@ void mc_control(client register_if reg, chanend flash_c) {
               break;
             
             // Monitor control buttons
-            case (!buttons_changed) => p_control_buttons when pinsneq(prev_control_buttons_val) :> prev_control_buttons_val:
+            case (!control_buttons_changed) => p_control_buttons when pinsneq(prev_control_buttons_val) :> prev_control_buttons_val:
               // Port value changed which means some button was pressed or released
               if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons port value changed to 0x%x\n", prev_control_buttons_val);
-              buttons_changed = 1;
+              control_buttons_changed = 1;
               tmr_dbc :> t_dbc; // update timer
 #if DEBOUNCE
               break;
 
             // debounce p_control_buttons
-            case (buttons_changed) => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> t_dbc:
+            case (control_buttons_changed) => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> t_dbc:
 #endif
-              buttons_changed = 0; // reset to re-activate case (buttons_changed) =>
+              control_buttons_changed = 0; // reset to re-activate case (control_buttons_changed) =>
               unsigned control_buttons_val;
               p_control_buttons :> control_buttons_val;
 
@@ -937,7 +953,7 @@ void mc_control(client register_if reg, chanend flash_c) {
               }
               break;
 
-#if !INFER_ENDSWITCHES_WITH_AC_SENSOR            
+#if ENDSWITCHES_CONNECTED            
             // Endswitches are connected with a cable
             // Monitor Endswitches
             case (!endswitches_changed) => p_endswitches when pinsneq(prev_endswitches_val) :> prev_endswitches_val:
@@ -963,6 +979,40 @@ void mc_control(client register_if reg, chanend flash_c) {
               }
               break;
 #endif
+
+
+#if !ENDSWITCHES_CONNECTED
+            // Errors are cleared with Button on board
+            case (!error_buttons_changed) => p_error_buttons when pinsneq(prev_error_buttons_val) :> prev_error_buttons_val:
+              // Port value changed which means some button was pressed or released
+              if(DEBUG_BUTTON_LOGIC) printf("p_error_buttons port value changed to 0x%x\n", prev_error_buttons_val);
+              error_buttons_changed = 1;
+              tmr_dbc_errors :> t_dbc_errors; // update timer
+#if DEBOUNCE
+              break;
+
+            // debounce p_error_buttons
+            case (error_buttons_changed) => tmr_dbc_errors when timerafter(t_dbc_errors+DEBOUNCE_TIME) :> t_dbc_errors:
+#endif
+              error_buttons_changed = 0; // reset to re-activate case (error_buttons_changed) =>
+              unsigned error_buttons_val;
+              p_error_buttons :> error_buttons_val;
+
+              if(error_buttons_val == prev_error_buttons_val) { // The button change persistet -> No glitch
+                if((error_buttons_val&1) == ERROR_BUTTON_PRESSED) {
+                  if(DEBUG_BUTTON_LOGIC) printf("Error reset button was pressed \n");
+                  clear_error_and_reset_position(&state_m0, reg);
+                  clear_error_and_reset_position(&state_m1, reg);
+                }
+                error_buttons_val_before_change = error_buttons_val;
+              } else {
+                if(DEBUG_BUTTON_LOGIC) printf("p_error_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_error_buttons_val);
+                prev_error_buttons_val = error_buttons_val; //prevent that glitch going away causes new pinsneq event
+              }
+              break;
+
+#endif
+
 
             // Position estimation
             case tmr_pos when timerafter(t_pos+POS_UPDATE_PERIOD_CYCLES) :> t_pos:
@@ -1006,13 +1056,6 @@ void mc_control(client register_if reg, chanend flash_c) {
                   }
               }; 
 
-#if INFER_ENDSWITCHES_WITH_AC_SENSOR
-              // Todo: remove
-              if(state_m1.state == OPENING || state_m1.state == CLOSING) {
-
-              }
-              // Note: monitor_motor_current can change motor state
-#endif
               if(state_m1.state == OPENING || state_m1.state == CLOSING) {  
                   int pos_change;
                   if(state_m1.state == OPENING) {

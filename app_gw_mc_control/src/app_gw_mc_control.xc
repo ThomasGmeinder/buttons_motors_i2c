@@ -62,14 +62,6 @@
 #include "spi_app.h"
 #include "dsp.h"
 
-// Note: Positions are calculated in micrometers so that integer speed can be tuned better.
-#define OPEN_POS_MIN MM_to_UM(0) // min position 
-#define CLOSED_POS_MAX MM_to_UM(1200)  // max position in um
-
-#define OPEN_POS_ES OPEN_POS_MIN  // Open position at Endswitch
-#define CLOSED_POS_ES CLOSED_POS_MAX
-
-#define DISTANCE_BETWEEN_ES = CLOSED_POS_ES-OPEN_POS_ES
 
 #if INFER_ENDSWITCHES_WITH_AC_SENSOR
 // increase the tolerance. There is a delay of 1.2 seconds until off is detected
@@ -80,6 +72,15 @@
 #define OPEN_TOLERANCE MM_to_UM(10)   
 #define CLOSED_TOLERANCE MM_to_UM(10) 
 #endif
+
+// Note: Positions are calculated in micrometers so that integer speed can be tuned better.
+#define OPEN_POS_ES MM_to_UM(0) // min position 
+#define CLOSED_POS_ES MM_to_UM(1200)  // max position in um
+
+#define OPEN_POS_MIN OPEN_POS_ES-OPEN_TOLERANCE 
+#define CLOSED_POS_MAX CLOSED_POS_ES+OPEN_TOLERANCE 
+
+#define DISTANCE_BETWEEN_ES = CLOSED_POS_ES-OPEN_POS_ES
 
 #define DEBOUNCE 1
 // 250ms are needed because switching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os

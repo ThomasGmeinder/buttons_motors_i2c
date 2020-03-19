@@ -32,15 +32,27 @@
 // Trigger Open Endswitch whilst Motor is Closing: POSITION_UNKNOWN error is correctly reported. Can be cleeared by triggering Endswitch again.
 // Trigger Closed Endswitch whilst Motor is Opening: POSITION_UNKNOWN error is correctly reported. Can be cleeared by triggering Endswitch again.
 // Trigger Closed Endswitch whilst Motor is Closing: MOTOR_TOO_FAST error is correctly reported
+// Trigger Open Endwitch correctly. check that motor position was synchronised to OPEN_POS_ES
+// Trigger Closed Endwitch correctly. check that motor position was synchronised to CLOSED_POS_ES
 
 /************* Test Protocol for AC_sensor configuration *********************/
 // For each motor:
 // Open/close ventilation with motor disconnected. POSITION_UNKNOWN error should occur 
+// Note: When POSITION_UNKNOWN error (or other severity > 0 errors) occur, 
+//    both push buttons light up red and the error kind is reported in the browser
+// Clear severity > 0 error: Press SW1. This shall clear the error and reset to position CLOSED_POS_ES. 
+//    Red LEDs in buttons shall be switched off and error in browser shall disappear
 // Open/close ventilation with motor connected. Disconnect motor whilst running. The controller shall interpret this as endswitch triggered. Error MOTOR_TOO_FAST shall be displayed in the browser.
-// close ventilation until closed endswitch is reached. If endswitch is triggered earlier than expected MOTOR_TOO_FAST shall be displayed in the browser.
-// open ventilation until open endswitch is reached. If endswitch is triggered earlier than expected MOTOR_TOO_FAST shall be displayed in the browser.
-// Note: When POSITION_UNKNOWN error (or other severity > 0 errors) occur, both push buttons light up red and the error kind is reported in the browser
-// Clear severity > 0 error: Press SW1. This shall clear the error and reset to position CLOSED_POS_ES. Red LEDs in buttons shall be switched off and error in browser shall disappear
+// close ventilation all the way 
+//    If endswitch is triggered before CLOSED_POS_ES is reached MOTOR_TOO_FAST shall be displayed in the browser.
+//    else if endswitch is not triggered when CLOSED_POS_MAX is reached MOTOR_TOO_SLOW shall be displayed in the browser.
+//    else endswitch was triggered when computed position was between CLOSED_POS_ES and CLOSED_POS_MAX and no error will be displayed
+//       check that motor position was synchronised to CLOSED_POS_ES
+// open ventilation all the way 
+//    If endswitch is triggered before OPEN_POS_ES is reached MOTOR_TOO_FAST shall be displayed in the browser.
+//    else if endswitch is not triggered when OPEN_POS_MAX is reached MOTOR_TOO_SLOW shall be displayed in the browser.
+//    else endswitch was triggered computed position was between OPEN_POS_ES and OPEN_POS_MIN and no error will be displayed
+//       check that motor position was synchronised to OPEN_POS_ES
 
 /************* Todo *********************/
 // Try to make sure that target_mp is always reached. Then the tolerances on the server can be set to 0.

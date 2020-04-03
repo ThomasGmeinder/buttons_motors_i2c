@@ -764,21 +764,23 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     timer tmr_pos;
     timer tmr_dbc; // debounce tiemr for p_control_buttons
-    timer tmr_dbc_errors;
 
-    int t_dbc, t_dbc_errors, t_pos;  // time variables
+    int t_dbc, t_pos;  // time variables
 
     unsigned control_buttons_changed = 0;
     unsigned prev_control_buttons_val, control_buttons_val_before_change;
-
-    unsigned error_buttons_changed = 0;
-    unsigned prev_error_buttons_val, error_buttons_val_before_change;
 
 #if ENDSWITCHES_CONNECTED
     timer tmr_dbc_es;  
     int t_dbc_es;
     unsigned endswitches_changed = 0;
     unsigned prev_endswitches_val;
+#else
+    timer tmr_dbc_errors;
+    int t_dbc_errors;
+    // when Endswitches are not connected, a button on the XMOS board is used to clear the error
+    unsigned error_buttons_changed = 0;
+    unsigned prev_error_buttons_val, error_buttons_val_before_change;
 #endif
 
     unsigned led_val = 0;

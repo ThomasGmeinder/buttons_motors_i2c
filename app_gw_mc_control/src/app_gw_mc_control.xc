@@ -484,7 +484,9 @@ void check_motor_position_after_endswitch_triggered(motor_state_s* ms, client re
   // ms->position is ahead of actual_position: Actual motor speed slower than estimate
 
   if(ms->state == OPENING) {
-    if(actual_position == CLOSED_POS_ES) {
+    if(actual_position == CLOSED_POS_ES && ms->position < CLOSED_POS_ES-CLOSED_TOLERANCE) { 
+      // Note: The second term of the above condition is to ensure no error is raised in the case where the closed endswitch was overrun (due to timing delays between detection and switching motor off)
+      //       Then the closed endswitch will be triggered again when opening and we have to ignore this event
       printf("Fatal Error. ENDSWITCH_CLOSED triggered when Motor %d is OPENING\n", ms->motor_idx);
       update_error_state(ms, reg, POSITION_UNKNOWN);
     } 
@@ -498,7 +500,8 @@ void check_motor_position_after_endswitch_triggered(motor_state_s* ms, client re
     }
   }
   if(ms->state == CLOSING) {
-    if(actual_position == OPEN_POS_ES) {
+    if(actual_position == OPEN_POS_ES && ms->position > OPEN_POS_ES+OPEN_TOLERANCE) {
+      // Note: The second term of the above condition is to ensure no error is raised in the case where the open endswitch was overrun (due to timing delays between detection and switching motor off)
       printf("Fatal Error. ENDSWITCH_OPEN triggered when Motor %d is CLOSING\n", ms->motor_idx);
       update_error_state(ms, reg, POSITION_UNKNOWN);
     } 

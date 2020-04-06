@@ -330,23 +330,42 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
 }
 
 // speeds are in um/s
-void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos, 
+void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos_flash, 
   unsigned opening_speed, unsigned closing_speed,
   unsigned endswitches_val, unsigned motor_idx, int t) {
+    printf("//// init_motor_state for Motor %d\n",motor_idx);
+
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
     ms->prev_error = NO_ERROR;
     ms->state = STOPPED;
-    if(motor_pos == INT_MIN) {
-      update_error_state(ms, reg, POSITION_UNKNOWN);      
-    } else {
-      update_error_state(ms, reg, NO_ERROR);
+
+    ms->position = motor_pos_flash; // start with position from flash
+    ms->update_flash = 0;
+    update_error_state(ms, reg, NO_ERROR); // start with no error. May be changed by the logic below
+    if(ENDSWITCHES_CONNECTED) {
+      // Derive initial position from Endswitches. This will override ms->position if a Endswitch is triggered
+      check_endswitches_and_update_states(endswitches_val, ms, reg);
+    } else if(!ENDSWITCHES_CONNECTED) {
+      // Initial position cannot be derived from Endswitches.
+      ms->position = CLOSED_POS_ES;
+      printf("Initialising Motor %d arbitrarily to closed position %d mm\n",motor_idx,UM_to_MM(CLOSED_POS_ES));
     }
-    ms->position = motor_pos;
+
+    if(ms->position == INT_MIN) {
+      printf("Error: Could not determine valid position from flash for Motor %d: %d um\n", motor_idx, ms->position);
+      update_error_state(ms, reg, POSITION_UNKNOWN);      
+    } else if(!position_in_range(ms->position)) {
+      printf("Error: Position is out of range for Motor %d: %d um\n", motor_idx, ms->position);
+      update_error_state(ms, reg, POSITION_UNKNOWN);     
+    } else {
+      printf("Determined valid position for Motor %d: %d um\n", motor_idx, ms->position);
+      if(ms->position != motor_pos_flash) ms->update_flash = 1;
+    }
+
     ms->target_position = ms->position;
     ms->open_button_blink_counter = 0;
     ms->close_button_blink_counter = 0;
-    ms->update_flash = 0;
     ms->time_of_last_flash_update = t;
 
     ms->opening_speed = opening_speed;
@@ -834,38 +853,13 @@ void mc_control(client register_if reg, chanend flash_c) {
       for(int i=0; i<FLASH_DATA_BYTES; ++i) {
         flash_c :> byte_buffer[i];
       }
-      // Init Motor 0 position
-
       if(byte_buffer[0] == FLASH_DATA_VALID_BYTE) {
+        // Get Motor 0 position from flash data
         memcpy(&m0_pos, &byte_buffer[1], sizeof(int));
-        if(position_in_range(m0_pos)) {
-          printf("Found valid position for Motor 0: %d um\n", m0_pos);          
-        } else {
-          printf("Error: Position in flash is out of range for Motor 0: %d um\n", m0_pos);
-          m0_pos = INT_MIN;
-        }
-
-      } 
-      else if(!ENDSWITCHES_CONNECTED) {
-        // Initial position cannot be derived from Endswitches.
-        m0_pos = CLOSED_POS_ES;
-        printf("Initialising Motor 0 to arbitrary position %d mm\n", UM_to_MM(m0_pos));
-      }
-    
-      // Init Motor 1 position
+      }     
       if(byte_buffer[MOTOR_FLASH_AREA_SIZE] == FLASH_DATA_VALID_BYTE) {
+        // Get Motor 1 position from flash data
         memcpy(&m1_pos, &byte_buffer[MOTOR_FLASH_AREA_SIZE+1], sizeof(int));
-        if(position_in_range(m1_pos)) {
-          printf("Found valid position for Motor 1: %d um\n", m1_pos);          
-        } else {
-          printf("Error: Position in flash is out of range for Motor 1: %d um\n", m1_pos);
-          m1_pos = INT_MIN;
-        }
-      } 
-      else if(!ENDSWITCHES_CONNECTED) {
-        // Initial position cannot be derived from Endswitches.
-        m1_pos = CLOSED_POS_ES;
-        printf("Initialising Motor 1 to arbitrary position %d mm\n", UM_to_MM(m1_pos));
       }
     }
 

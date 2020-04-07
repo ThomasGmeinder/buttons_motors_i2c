@@ -4,6 +4,7 @@
 
 #include "i2c.h"
 #include "debug_print.h"
+#include "stdio.h"
 #include "string.h"
 #include "i2c_app.h"
 #include "common.h"
@@ -71,6 +72,9 @@ void i2c_slave_register_file(server i2c_slave_callback_if i2c,
           //debug_printf("REGFILE setting changed bit in status register %d\n", regnum);
           //data |= 1<<STATUS_REG_CHANGED_BIT_IDX; // set changed bit in status register
         }
+        if(get_motor_reg_idx(current_regnum) == 5 && registers[regnum] & CLEAR_ERROR_BIT != 0) 
+           printf("ERROR: Application is trying to write Motor Error Register %d before Error Cleared Bit was read by the Server\n", regnum);
+
         registers[regnum] = data;
       }
       break;

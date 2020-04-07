@@ -42,6 +42,8 @@
 
 #define ENABLE_INTERNAL_PULLS 1
 
+#define CLEAR_ERROR_BIT 0x40
+
 typedef enum {
     OPENING,
     CLOSING,
@@ -56,11 +58,15 @@ typedef enum {
 // Todo: Maybe separate MOTOR_TOO_SLOW and MOTOR_TOO_FAST into a warning register
 // Errors with severity
 typedef enum {
-    NO_ERROR, // 0
-    POSITION_UNKNOWN, // 1
-    BOTH_ENDSWITCHES_ON, // 1
-    MOTOR_TOO_SLOW, // 0
-    MOTOR_TOO_FAST, // 0
+    NO_ERROR, 
+    MOTOR_TOO_SLOW, 
+    MOTOR_TOO_FAST, 
+    POSITION_UNKNOWN,
+    OUT_OF_RANGE,
+    BOTH_ENDSWITCHES_ON, 
+    CLOSED_ES_WHILST_OPENING, // Motor is running in wrong direction or not at all !
+    OPEN_ES_WHILST_CLOSING, // Motor is running in wrong direction or not at all!
+    NUM_ERRORS
 } motor_error_t;
 
 typedef enum {

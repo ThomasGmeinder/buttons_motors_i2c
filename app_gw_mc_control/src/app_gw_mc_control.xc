@@ -67,6 +67,15 @@
 // E.g.: Introduce a new error reset bit "clear all errors" in addtion to "clear previous error"
 // "clear all errors" would be set when the error clear button is pressed
 
+// New spec for registiering and clearing errors:
+// Errors can only be cleared by pressing both control buttons. 
+// This will clear all severity > 0 errors of the corresponding motor on the server.
+// It's the responsibility of the operator to fix the error before clearing it!
+//   E.g. by by moving the motor to the endswitch before pressing the button
+// The SW has to ensure that if the error wasn't cleared it is flagged again.
+//   E.g. if the error was POSITION_UNKNOWN and no Endswitch is seen after clearing error then the error will be flagged again
+// Errors are saved to flash so they persist after power cut and keep XMOS controller in sync with Server
+
 #include <platform.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -104,7 +113,7 @@
 
 #define DEBOUNCE 1
 // 250ms are needed because switching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
-#define DEBOUNCE_TIME XS1_TIMER_HZ/4  
+#define DEBOUNCE_TIME XS1_TIMER_HZ/8 // pressed value is registerd after 2 * DEBOUNCE_TIME
 #define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES*20 // Update flash every 2 seconds
 
 #define LED_CYCLES (XS1_TIMER_HZ/10) // 100ms
@@ -209,6 +218,11 @@ void delay_us(unsigned time_us) {
 void stop_motor(motor_state_s* ms, client register_if reg);
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator);
 void update_position_regs(motor_state_s* ms, client register_if reg);
+void init_mc(client register_if reg, chanend flash_c);
+void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos_flash, 
+  unsigned opening_speed, unsigned closing_speed,
+  unsigned endswitches_val, unsigned motor_idx, int t);
+void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c);
 
 // Functions
 unsigned bit_set(unsigned bit_index, unsigned portval) {
@@ -241,7 +255,7 @@ int motor_endswitches_triggered(unsigned endswitches_val, unsigned mask) {
   return 1;
 }
 
-void update_error_state(motor_state_s* ms, client register_if reg, motor_error_t err) {
+void process_error(motor_state_s* ms, client register_if reg, motor_error_t err) {
    if(err == ms->error) {
      // ignore if same error is repeatedly set. 
      // That should ensure that CLEAR_ERROR_BIT is not overwritten before it is read by the server
@@ -249,18 +263,12 @@ void update_error_state(motor_state_s* ms, client register_if reg, motor_error_t
    }
 
    ms->error = err;
-   unsigned error_reg_val = err;
 
-   if(ms->prev_error != NO_ERROR && ms->error == NO_ERROR && severity_lookup[ms->error]>0) {
-     // Clear Errors with severity > 0.
-     // Severity 0 Errors are just warnings that are cleared automatically on the server
-     error_reg_val = ms->prev_error | CLEAR_ERROR_BIT; // set cleared bit
-     printf("Clearing Error %d for Motor %d\n", ms->prev_error, ms->motor_idx);
-   } 
-   else if(ms->prev_error == NO_ERROR && ms->error != NO_ERROR) {
+   if(ms->prev_error == NO_ERROR && ms->error != NO_ERROR) {
      printf("Setting new Error %d for Motor %d\n", ms->error, ms->motor_idx);
    } 
    else if(ms->prev_error != ms->error) {
+     // todo: Fix this error message
      printf("A new error %d occured before the previous error %d was cleared\n", ms->error, ms->prev_error);
    }
 
@@ -268,7 +276,10 @@ void update_error_state(motor_state_s* ms, client register_if reg, motor_error_t
 
    // Todo review if it is enough to set error reg here
    int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
-   reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, error_reg_val); 
+   reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, err); 
+
+   // Update Flash
+   ms->update_flash = 1;
 }
 
 void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state_s* ms, client register_if reg) {
@@ -277,7 +288,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 
    unsigned call_stop_motor = 0;
    if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN | ENDSWITCH_CLOSED)) {
-      update_error_state(ms, reg, BOTH_ENDSWITCHES_ON);  
+      process_error(ms, reg, BOTH_ENDSWITCHES_ON);  
       if(ms->error != BOTH_ENDSWITCHES_ON) {
        printf("Fatal Error: Both Endswitches on Motor %d triggered at the same time\n", ms->motor_idx);
        call_stop_motor = 1;
@@ -294,32 +305,24 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
          ms->target_position = ms->position; 
          // Wrong Endswitch is on. 
          // Either motor did not start running or is running in the wrong direction.
-         update_error_state(ms, reg, OPEN_ES_WHILST_CLOSING);  
+         process_error(ms, reg, OPEN_ES_WHILST_CLOSING);  
          call_stop_motor = 1;
        }
      } else if(ms->state == OPENING) {       
         printf("Motor %d open endswitch triggered whilst opening\n", ms->motor_idx);
         if(OPEN_POS_ES - ms->position > OPEN_TOLERANCE) {
            printf("OPENING speed slower than estimate. Position is at %d mm when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
-           update_error_state(ms, reg, MOTOR_TOO_SLOW); // Motor slower than estimation
+           process_error(ms, reg, MOTOR_TOO_SLOW); // Motor slower than estimation
         } 
         else if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
            printf("OPENING speed faster than estimate. Position is at %d mm when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
-           update_error_state(ms, reg, MOTOR_TOO_FAST); // Motor faster than estimation
-        } else {
-           update_error_state(ms, reg, NO_ERROR); // can be overridden!
-        }
+           process_error(ms, reg, MOTOR_TOO_FAST); // Motor faster than estimation
+        };
         ms->position = OPEN_POS_ES;
         ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position
         call_stop_motor = 1;
       }
-      // Clear the errors that can be cleared by triggering an endswitch.
-      if(ms->error == BOTH_ENDSWITCHES_ON || ms->error == POSITION_UNKNOWN || ms->error == OUT_OF_RANGE) {   
-        ms->position = OPEN_POS_ES;
-        ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position
-        update_position_regs(ms, reg); // stop_motor won't be called have to call update_position_regs
-        update_error_state(ms, reg, NO_ERROR); 
-      }
+
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
      if(ms->state == OPENING) {   
        if(ms->position >= CLOSED_POS_ES-CLOSED_TOLERANCE && ms->position <= CLOSED_POS_ES+CLOSED_TOLERANCE) { 
@@ -332,7 +335,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
          ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position 
          // Wrong Endswitch is on. 
          // Either motor did not start running or is running in the wrong direction.
-         update_error_state(ms, reg, CLOSED_ES_WHILST_OPENING); // Wrong Endswitch triggered. 
+         process_error(ms, reg, CLOSED_ES_WHILST_OPENING); // Wrong Endswitch triggered. 
          call_stop_motor = 1;
        }
      } 
@@ -340,24 +343,15 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
         printf("Motor %d closed endswitch triggered whilst closing\n", ms->motor_idx);
         if(CLOSED_POS_ES - ms->position > CLOSED_TOLERANCE) {
            printf("CLOSING speed faster than estimate. Position is at %d mm when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
-           update_error_state(ms, reg, MOTOR_TOO_FAST); // Motor slower than estimation
+           process_error(ms, reg, MOTOR_TOO_FAST); // Motor slower than estimation
         }   
         else if(ms->position - CLOSED_POS_ES > CLOSED_TOLERANCE) {
           printf("CLOSING speed slower than estimate. Position is at %d mm when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
-          update_error_state(ms, reg, MOTOR_TOO_SLOW); // Motor slower than estimation
-        } else {
-          update_error_state(ms, reg, NO_ERROR); // 
+          process_error(ms, reg, MOTOR_TOO_SLOW); // Motor slower than estimation
         }
         ms->position = CLOSED_POS_ES;
         ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position 
         call_stop_motor = 1;
-      }
-      // Clear the errors that can be cleared by triggering an endswitch.
-      if(ms->error == BOTH_ENDSWITCHES_ON || ms->error == POSITION_UNKNOWN || ms->error == OUT_OF_RANGE) {   
-        ms->position = CLOSED_POS_ES;
-        ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position 
-        update_position_regs(ms, reg); // stop_motor won't be called have to call update_position_regs
-        update_error_state(ms, reg, NO_ERROR); 
       }
    };
 
@@ -365,8 +359,14 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 
 }
 
-void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg) {
+void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg, chanend flash_c) {
   // Ignore button in case of severe errors
+  const unsigned both_buttons_pressed = CONTROL_BUTTON_PRESSED==1 ? 0b11 : 0;  
+  if(motor_control_buttons == both_buttons_pressed) {
+     clear_errors(ms, reg, flash_c);
+     return;
+  }
+
   if(severity_lookup[ms->error]>0) {
     printf("Motor %d is in ERROR state with ERROR code %d (Severity > 0), ignoring control button change\n", ms->motor_idx, ms->error);
     return;
@@ -424,7 +424,7 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos_f
 
     ms->position = motor_pos_flash; // start with position from flash
     ms->update_flash = 0;
-    update_error_state(ms, reg, NO_ERROR); // start with no error. May be changed by the logic below
+    process_error(ms, reg, NO_ERROR); // start with no error. May be changed by the logic below
     if(ENDSWITCHES_CONNECTED) {
       // Derive initial position from Endswitches. This will override ms->position if a Endswitch is triggered
       check_endswitches_and_update_states(endswitches_val, ms, reg);
@@ -438,10 +438,10 @@ void init_motor_state(motor_state_s* ms, client register_if reg, int motor_pos_f
 
     if(ms->position == INT_MIN) {
       printf("Error: Could not determine valid position from flash for Motor %d: %d um\n", motor_idx, ms->position);
-      update_error_state(ms, reg, POSITION_UNKNOWN);      
+      process_error(ms, reg, POSITION_UNKNOWN);      
     } else if(!position_in_range(ms->position)) {
       printf("Error: Position is out of range for Motor %d: %d um\n", motor_idx, ms->position);
-      update_error_state(ms, reg, OUT_OF_RANGE);     
+      process_error(ms, reg, OUT_OF_RANGE);     
     } else {
       printf("Determined valid position for Motor %d: %d um\n", motor_idx, ms->position);
       if(ms->position != motor_pos_flash) ms->update_flash = 1;
@@ -482,7 +482,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
            ms->position = ms->target_position + CLOSED_TOLERANCE;
 
            stop_motor(ms, reg);
-           update_error_state(ms, reg, MOTOR_TOO_SLOW);
+           process_error(ms, reg, MOTOR_TOO_SLOW);
            
            return;
          }
@@ -512,7 +512,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
            // fix position. This is key to avoid range error. 
            ms->position = ms->target_position - OPEN_TOLERANCE;       
            stop_motor(ms, reg);
-           update_error_state(ms, reg, MOTOR_TOO_SLOW);
+           process_error(ms, reg, MOTOR_TOO_SLOW);
            
            return;
          } 
@@ -535,7 +535,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    }
  
    if(!position_in_range(ms->position)) {
-      update_error_state(ms, reg, OUT_OF_RANGE);
+      process_error(ms, reg, OUT_OF_RANGE);
    }
 
 }
@@ -695,11 +695,6 @@ int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator) 
     p_m1_on <: MOTOR_ON;  
   }
 
-  // clear severity 0 errors
-  if(severity_lookup[ms->error]==0) {
-    update_error_state(ms, reg, NO_ERROR);
-  }
-
   return 0;
 }
 
@@ -783,7 +778,7 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
             } else if (!ms->AC_current_on) {
                printf("ERROR: Motor %d should be running but no AC current was detected\n\n", ms->motor_idx);
                stop_motor(ms, reg);
-               update_error_state(ms, reg, POSITION_UNKNOWN);
+               process_error(ms, reg, POSITION_UNKNOWN);
             }
           }
        }
@@ -795,7 +790,7 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
              if(ms->AC_current_on) {
                 printf("WARNING: Motor current sensor detected current in Motor %d after it was switched off!\n", ms->motor_idx);
                 stop_motor(ms, reg);
-                update_error_state(ms, reg, POSITION_UNKNOWN);
+                process_error(ms, reg, POSITION_UNKNOWN);
                 
              }
            }
@@ -804,18 +799,23 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
 }
 #endif
 
-void clear_error_and_reset_position(motor_state_s* ms, client register_if reg) {
-  if(ms->error != NO_ERROR) {
-    printf("Clearing Error for Motor %d and resetting position to CLOSED_POS_ES %d\n",ms->motor_idx,UM_to_MM(CLOSED_POS_ES));
-    ms->position = CLOSED_POS_ES;
-    ms->target_position = ms->position;
-    update_position_regs(ms, reg);
-    update_error_state(ms, reg, NO_ERROR);
-  }
+void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c) {
+
+  int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
+  // clear all errors
+
+  process_error(ms, reg, NO_ERROR);
+
+  printf("Clearing Errors for Motor %d\n", ms->prev_error, ms->motor_idx);
+  reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, CLEAR_ERROR_BIT); 
+
+  // Todo: Update flash to clear error
+
 }
 
 // global shared memory
 motor_state_s state_m0, state_m1;
+
 
 void mc_control(client register_if reg, chanend flash_c) {
 
@@ -824,8 +824,11 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     int t_dbc, t_pos;  // time variables
 
-    unsigned control_buttons_changed = 0;
+    unsigned control_buttons_pressed = 0;
     unsigned prev_control_buttons_val, control_buttons_val_before_change;
+    unsigned control_buttons_counter = 0;
+
+    const unsigned all_buttons_off = CONTROL_BUTTON_PRESSED==0 ? 0b1111 : 0;
 
 #if ENDSWITCHES_CONNECTED
     timer tmr_dbc_es;  
@@ -905,22 +908,15 @@ void mc_control(client register_if reg, chanend flash_c) {
       }
     }
 
-
-    // Is this needed??
-    p_control_buttons :> prev_control_buttons_val;
-    control_buttons_val_before_change = prev_control_buttons_val;
-
     unsigned endswitches_m0 = 0;
     unsigned endswitches_m1 = 0;
 
 #if ENDSWITCHES_CONNECTED
-    p_endswitches :> prev_endswitches_val;
+    unsigned endswitches_val;
+    p_endswitches :> endswitches_val;
     endswitches_m0 = prev_endswitches_val & 0b11;
     endswitches_m1 = (prev_endswitches_val >> 2) & 0b11;
 #endif
-
-    // Init!!
-    tmr_pos :> t_pos;  // init position update time
 
     // M1 opening speed: 123cm / 75s = 1.23e6 um / 75s = 16400
     // M1 closing speed: 123cm / 75s = 1.23e6 um / 77s = 15975
@@ -978,33 +974,40 @@ void mc_control(client register_if reg, chanend flash_c) {
               break;
             
             // Monitor control buttons
-            case (!control_buttons_changed) => p_control_buttons when pinsneq(prev_control_buttons_val) :> prev_control_buttons_val:
+            case (!control_buttons_pressed) => p_control_buttons when pinsneq(all_buttons_off) :> prev_control_buttons_val:
               // Port value changed which means some button was pressed or released
               if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons port value changed to 0x%x\n", prev_control_buttons_val);
-              control_buttons_changed = 1;
+              control_buttons_pressed = 1;
+              control_buttons_counter = 0;
               tmr_dbc :> t_dbc; // update timer
 #if DEBOUNCE
               break;
 
             // debounce p_control_buttons
-            case (control_buttons_changed) => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> t_dbc:
+            case (control_buttons_pressed) => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> t_dbc:
 #endif
-              control_buttons_changed = 0; // reset to re-activate case (control_buttons_changed) =>
               unsigned control_buttons_val;
               p_control_buttons :> control_buttons_val;
-
-              if(control_buttons_val == prev_control_buttons_val) { // The button change persistet -> No glitch
-                unsigned control_buttons_m0 = control_buttons_val & 0b11;
-                unsigned control_buttons_m1 = (control_buttons_val >> 2) & 0b11;
-                printf("Motor Control Buttons changed from 0x%x to 0x%x\n", control_buttons_val_before_change, control_buttons_val);
-                check_control_buttons_and_update_states(control_buttons_m0, &state_m0, reg); 
-                check_control_buttons_and_update_states(control_buttons_m1, &state_m1, reg); 
-
-                control_buttons_val_before_change = control_buttons_val;
-              } else {
-                if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
-                prev_control_buttons_val = control_buttons_val; //prevent that glitch going away causes new pinsneq event
+              if(control_buttons_counter==0) {
+                // just store the current value
+                prev_control_buttons_val = control_buttons_val;
+              } else if(control_buttons_counter==1) {
+                if(control_buttons_val == prev_control_buttons_val) { // The button change persistet -> No glitch
+                  unsigned control_buttons_m0 = control_buttons_val & 0b11;
+                  unsigned control_buttons_m1 = (control_buttons_val >> 2) & 0b11;
+                  printf("Motor Control Buttons pressed. Value: %x\n", control_buttons_val);
+                  check_control_buttons_and_update_states(control_buttons_m0, &state_m0, reg, flash_c); 
+                  check_control_buttons_and_update_states(control_buttons_m1, &state_m1, reg, flash_c); 
+                } else {
+                  if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                }
+              } else if(control_buttons_counter>1) {
+                // look for button released
+                if(control_buttons_val == all_buttons_off) {
+                  control_buttons_pressed = 0; // this will re-enable the case (!control_buttons_pressed)
+                }
               }
+              control_buttons_counter += 1;
               break;
 
 #if ENDSWITCHES_CONNECTED            
@@ -1055,8 +1058,8 @@ void mc_control(client register_if reg, chanend flash_c) {
               if(error_buttons_val == prev_error_buttons_val) { // The button change persistet -> No glitch
                 if((error_buttons_val&1) == ERROR_BUTTON_PRESSED) {
                   if(DEBUG_BUTTON_LOGIC) printf("Error reset button was pressed \n");
-                  clear_error_and_reset_position(&state_m0, reg);
-                  clear_error_and_reset_position(&state_m1, reg);
+                  clear_errors(&state_m0, reg, flash_c);
+                  clear_errors(&state_m1, reg, flash_c);
                 }
                 error_buttons_val_before_change = error_buttons_val;
               } else {

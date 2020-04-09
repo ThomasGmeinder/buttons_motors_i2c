@@ -9,15 +9,19 @@
 // shared memory
 extern motor_state_s state_m0, state_m1;
 
-void write_motor_position_to_flash(motor_state_s* ms) {   
+void write_motor_state_to_flash(motor_state_s* ms) {   
 
     unsigned char *page_buffer;
     page_buffer = malloc(fl_getWriteScratchSize(ms->motor_idx*MOTOR_FLASH_AREA_SIZE, MOTOR_FLASH_AREA_SIZE));
     unsigned char data[MOTOR_FLASH_AREA_SIZE];
     data[0] = FLASH_DATA_VALID_BYTE;
     memcpy(&data[1], &(ms->position), sizeof(int));
+    data[5] = ms->error;
 
-    printf("!!!!!! Writing new motor position %d um to flash for Motor %d\n", ms->position, ms->motor_idx);
+    printf("!!!!!! Writing new motor state to flash for Motor %d\n", ms->motor_idx);
+    printf(" Position: %d\n", ms->position);
+    printf(" Error: %d\n", ms->error);
+
     fl_writeData(ms->motor_idx*MOTOR_FLASH_AREA_SIZE,
               MOTOR_FLASH_AREA_SIZE,
               data,
@@ -85,9 +89,9 @@ void test_flash() {
 
 void handle_flash_write() {
 	if(state_m0.update_flash) {
-     write_motor_position_to_flash(&state_m0);
+     write_motor_state_to_flash(&state_m0);
   }	
   if(state_m1.update_flash) {
-     write_motor_position_to_flash(&state_m1);
+     write_motor_state_to_flash(&state_m1);
   }
 }

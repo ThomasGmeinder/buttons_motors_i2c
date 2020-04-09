@@ -109,7 +109,7 @@ typedef struct {
 } motor_state_s;
 
 #define FLASH_DATA_VALID_BYTE 0x3C // arbitrary value
-#define MOTOR_FLASH_AREA_SIZE 5 // one byte marker, 4 bytes position
+#define MOTOR_FLASH_AREA_SIZE 6 // one byte marker, 4 bytes position, one byte error
 #define FLASH_DATA_BYTES (MOTOR_FLASH_AREA_SIZE*2)
 
 // length translation macros

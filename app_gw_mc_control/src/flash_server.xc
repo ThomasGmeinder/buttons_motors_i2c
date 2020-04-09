@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-
+#include <assert.h>
 #include "common.h"
 
 // List of QuadSPI devices that are supported by default.
@@ -38,21 +38,22 @@ void flash_server(chanend flash_c) {
     }
 
     while(1) {
-      char flash_command;
+      unsigned motor_index;
     	select {
-    		case flash_c :> flash_command:
+    		case flash_c :> motor_index:
     		   // Read Motor positions from flash
-               char byte_buffer[FLASH_DATA_BYTES];
+               char byte_buffer[MOTOR_FLASH_AREA_SIZE];
+               assert(motor_index <= 1);
                // Connect to the QuadSPI device using the quadflash library function fl_connectToDevice. 
-               if(fl_readData(0, FLASH_DATA_BYTES, byte_buffer) != 0) {
+               if(fl_readData(motor_index*MOTOR_FLASH_AREA_SIZE, MOTOR_FLASH_AREA_SIZE, byte_buffer) != 0) {
                  printf("fl_readData Error\n");
                  error = 2;
                }
                flash_c <: error;
 
                if(!error) {
-                 printf("fl_readData Read %d bytes from flash:\n", FLASH_DATA_BYTES);
-                 for(unsigned i=0; i<FLASH_DATA_BYTES; ++i) {
+                 printf("fl_readData Read %d bytes from flash:\n", MOTOR_FLASH_AREA_SIZE);
+                 for(unsigned i=0; i<MOTOR_FLASH_AREA_SIZE; ++i) {
                    printf("0x%x %d\n", byte_buffer[i], byte_buffer[i]);
                    flash_c <: byte_buffer[i];
                  }

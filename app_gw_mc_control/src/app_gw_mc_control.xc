@@ -111,8 +111,7 @@
 
 #define DISTANCE_BETWEEN_ES = CLOSED_POS_ES-OPEN_POS_ES
 
-#define DEBOUNCE 1
-// 250ms are needed because switching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
+// 2*125ms are needed because switching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
 #define DEBOUNCE_TIME XS1_TIMER_HZ/8 // pressed value is registerd after 2 * DEBOUNCE_TIME
 #define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES*20 // Update flash every 2 seconds
 
@@ -218,8 +217,8 @@ void delay_us(unsigned time_us) {
 void stop_motor(motor_state_s* ms, client register_if reg);
 int start_motor(motor_state_s* ms, client register_if reg, actuator_t actuator);
 void update_position_regs(motor_state_s* ms, client register_if reg);
-void init_mc(client register_if reg, chanend flash_c);
-void init_motor_state(motor_state_s* ms, client register_if reg, 
+
+void init_motor(motor_state_s* ms, client register_if reg, 
   unsigned opening_speed, unsigned closing_speed,
   unsigned motor_idx, chanend flash_c);
 void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c);
@@ -265,9 +264,13 @@ void process_error(motor_state_s* ms, client register_if reg, motor_error_t err)
    ms->error = err;
 
    if(ms->prev_error == NO_ERROR && ms->error != NO_ERROR) {
+     // Update Flash
+     ms->update_flash = 1;
      printf("Setting new Error %d for Motor %d\n", ms->error, ms->motor_idx);
    } 
    else if(ms->prev_error != ms->error) {
+     // Update Flash
+     ms->update_flash = 1;
      // todo: Fix this error message
      printf("A new error %d occured before the previous error %d was cleared\n", ms->error, ms->prev_error);
    }
@@ -283,8 +286,6 @@ void process_error(motor_state_s* ms, client register_if reg, motor_error_t err)
    int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
    reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, err); 
 
-   // Update Flash
-   ms->update_flash = 1;
 }
 
 void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state_s* ms, client register_if reg) {
@@ -326,6 +327,9 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
         ms->position = OPEN_POS_ES;
         ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position
         call_stop_motor = 1;
+      } else {
+        ms->position = OPEN_POS_ES;
+        ms->target_position = ms->position; 
       }
 
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
@@ -357,6 +361,10 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
         ms->position = CLOSED_POS_ES;
         ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position 
         call_stop_motor = 1;
+      }
+      else {
+        ms->position = CLOSED_POS_ES;
+        ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position 
       }
    };
 
@@ -471,16 +479,19 @@ void init_motor_position_and_error(motor_state_s* ms, client register_if reg, ch
     }
 
     ms->target_position = ms->position;
+
+    update_position_regs(ms, reg);
 }
 
 // speeds are in um/s
-void init_motor_state(motor_state_s* ms, client register_if reg, 
+void init_motor(motor_state_s* ms, client register_if reg, 
   unsigned opening_speed, unsigned closing_speed,
   unsigned motor_idx, chanend flash_c) {
-    printf("//// init_motor_state for Motor %d\n",motor_idx);
+    printf("//// init_motor for Motor %d\n",motor_idx);
 
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
+    ms->state = STOPPED;
 
     init_motor_position_and_error(ms, reg, flash_c);
 
@@ -500,6 +511,10 @@ void init_motor_state(motor_state_s* ms, client register_if reg,
     ms->AC_current_on_flag = 0;
 #endif
 
+    int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
+    // Causes server control to take over after I2C control: 
+    reg.set_register(base_reg, ms->state); 
+    reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
 
 }
 
@@ -598,18 +613,6 @@ void update_position_regs(motor_state_s* ms, client register_if reg) {
 
   reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  UM_to_CM(ms->target_position));
   reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, UM_to_CM(browser_pos));
-}
-
-void init_regs(motor_state_s* ms, client register_if reg) {
-  int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
-  // Causes server control to take over after I2C control: 
-  reg.set_register(base_reg, ms->state); 
-  reg.set_register(base_reg+MOTOR_ACTUATOR_REG_OFFSET, ms->actuator);  // BUTTON == 1 which means server_changed_motor_position
-
-  if(ms->error == NO_ERROR) { // Only init if there was no error
-    reg.set_register(base_reg+MOTOR_TARGET_POS_REG_OFFSET,  UM_to_CM(ms->target_position));
-    reg.set_register(base_reg+MOTOR_CURRENT_POS_REG_OFFSET, UM_to_CM(ms->position));
-  }
 }
 
 
@@ -872,8 +875,9 @@ void mc_control(client register_if reg, chanend flash_c) {
 #if ENDSWITCHES_CONNECTED
     timer tmr_dbc_es;  
     int t_dbc_es;
-    unsigned endswitches_pressed = 0;
+    unsigned endswitches_triggered = 0;
     unsigned prev_endswitches_val;
+    unsigned endwitch_val_counter=0;
 
     const unsigned all_ES_off = ES_TRIGGERED==0 ? 0b1111 : 0;
 #else
@@ -922,11 +926,8 @@ void mc_control(client register_if reg, chanend flash_c) {
 
     // M1 opening speed: 123cm / 75s = 1.23e6 um / 75s = 16400
     // M1 closing speed: 123cm / 75s = 1.23e6 um / 77s = 15975
-    init_motor_state(&state_m0, reg, 16400, 15974, 0, flash_c);
-    init_regs(&state_m0, reg);
-    init_motor_state(&state_m1, reg, 16400, 15974, 1, flash_c);
-    init_regs(&state_m1, reg);
-
+    init_motor(&state_m0, reg, 16400, 15974, 0, flash_c);
+    init_motor(&state_m1, reg, 16400, 15974, 1, flash_c);
 
     while(1) {
         // input from all input ports and store in prev values
@@ -979,19 +980,17 @@ void mc_control(client register_if reg, chanend flash_c) {
             // Monitor control buttons
             case (!control_buttons_pressed) => p_control_buttons when pinsneq(all_buttons_off) :> int:
               // Port value changed which means some button was pressed 
-              control_buttons_pressed = 1;
-              control_buttons_counter = 0;
+              control_buttons_pressed = 1; // activate timer case below
+              control_buttons_counter = 0; // reset counter
               tmr_dbc :> t_dbc; // update timer
-#if DEBOUNCE
               break;
 
             // debounce p_control_buttons
             case (control_buttons_pressed) => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> t_dbc:
-#endif
               unsigned control_buttons_val;
               p_control_buttons :> control_buttons_val;
               if(control_buttons_counter==0) {
-                if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons port value changed to 0x%x\n", prev_control_buttons_val);
+                if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons port value changed to 0x%x\n", control_buttons_val);
                 // just store the current value
                 prev_control_buttons_val = control_buttons_val;
               } else if(control_buttons_counter==1) {
@@ -1005,7 +1004,8 @@ void mc_control(client register_if reg, chanend flash_c) {
                   if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after 2*DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
                 }
               } else if(control_buttons_counter>1) {
-                // look for button released
+                // Have to wait for button release! 
+                // Otherwise pressing for longer than 2*DEBOUNCE_TIME will be considered as button pressed again. 
                 if(control_buttons_val == all_buttons_off) {
                   control_buttons_pressed = 0; // this will re-enable the case (!control_buttons_pressed)
                 }
@@ -1016,61 +1016,44 @@ void mc_control(client register_if reg, chanend flash_c) {
 #if ENDSWITCHES_CONNECTED            
             // Endswitches are connected with a cable
             // Monitor Endswitches. Event fires when one or more Endswitches are triggered
-            case (!endswitches_pressed) => p_endswitches when pinsneq(all_ES_off) :> prev_endswitches_val:
+            // 
+            case (!endswitches_triggered) => p_endswitches when pinsneq(all_ES_off) :> int:
               // Port value changed which means some switch was pressed or released
-              printf("Endswitches port changed event. new value 0x%x\n", prev_endswitches_val);
-              endswitches_pressed = 1;
+              endswitches_triggered = 1; // activate timer case below
+              endwitch_val_counter = 0;  // reset counter
               tmr_dbc_es :> t_dbc_es; // update timer
-#if DEBOUNCE
               break;
 
             // debounce p_endswitches
-            case (endswitches_pressed) =>  tmr_dbc_es when timerafter(t_dbc_es+DEBOUNCE_TIME) :> t_dbc_es:
-#endif
-              endswitches_pressed = 0; // reset to re-activate case (endswitches_pressed) =>
+            // When endswitches_triggered was set by the above event, sample p_endswitches after DEBOUNCE_TIME
+            // Then wait another DEBOUNCE_TIME and sample again to see if the value persisted
+            // If value persisted process it.
+            // else re-enable the above event
+            case (endswitches_triggered) =>  tmr_dbc_es when timerafter(t_dbc_es+DEBOUNCE_TIME) :> t_dbc_es:
               unsigned endswitches_val;
               p_endswitches :> endswitches_val;
-              if(endswitches_val == prev_endswitches_val) { // The button change persistet -> No glitchheck
-                int endswitches_m0 = endswitches_val & 0b11;
-                int endswitches_m1 = (endswitches_val >> 2) & 0b11;
-                printf("Endswitches changed to value 0x%x\n", endswitches_val);
-                check_endswitches_and_update_states(endswitches_m0, &state_m0, reg); // Check that Open and Closed are not triggered at the same time
-                check_endswitches_and_update_states(endswitches_m1, &state_m1, reg); // Check that Open and Closed are not triggered at the same time
+
+              int endswitches_val_persisted = 0;
+              if(endwitch_val_counter==0) {
+                printf("Endswitches triggered. new value 0x%x\n", endswitches_val);
+                prev_endswitches_val = endswitches_val; // store it to compare next time
               }
-              break;
-#endif
-
-
-#if !ENDSWITCHES_CONNECTED
-            // Errors are cleared with Button on board
-            case (!error_buttons_changed) => p_error_buttons when pinsneq(prev_error_buttons_val) :> prev_error_buttons_val:
-              // Port value changed which means some button was pressed or released
-              if(DEBUG_BUTTON_LOGIC) printf("p_error_buttons port value changed to 0x%x\n", prev_error_buttons_val);
-              error_buttons_changed = 1;
-              tmr_dbc_errors :> t_dbc_errors; // update timer
-#if DEBOUNCE
-              break;
-
-            // debounce p_error_buttons
-            case (error_buttons_changed) => tmr_dbc_errors when timerafter(t_dbc_errors+DEBOUNCE_TIME) :> t_dbc_errors:
-#endif
-              error_buttons_changed = 0; // reset to re-activate case (error_buttons_changed) =>
-              unsigned error_buttons_val;
-              p_error_buttons :> error_buttons_val;
-
-              if(error_buttons_val == prev_error_buttons_val) { // The button change persistet -> No glitch
-                if((error_buttons_val&1) == ERROR_BUTTON_PRESSED) {
-                  if(DEBUG_BUTTON_LOGIC) printf("Error reset button was pressed \n");
-                  clear_errors(&state_m0, reg, flash_c);
-                  clear_errors(&state_m1, reg, flash_c);
-                }
-                error_buttons_val_before_change = error_buttons_val;
-              } else {
-                if(DEBUG_BUTTON_LOGIC) printf("p_error_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_error_buttons_val);
-                prev_error_buttons_val = error_buttons_val; //prevent that glitch going away causes new pinsneq event
+              else if(endwitch_val_counter==1) {
+                if(endswitches_val==prev_endswitches_val) {
+                  // Value persistet
+                  int endswitches_m0 = endswitches_val & 0b11;
+                  int endswitches_m1 = (endswitches_val >> 2) & 0b11;
+                  printf("Endswitches changed to value 0x%x\n", endswitches_val);
+                  check_endswitches_and_update_states(endswitches_m0, &state_m0, reg); // Check that Open and Closed are not triggered at the same time
+                  check_endswitches_and_update_states(endswitches_m1, &state_m1, reg); // Check that Open and Closed are not triggered at the same time
+                } else {
+                  if(DEBUG_BUTTON_LOGIC) printf("p_endswitches value change ignored. Value 0x%x didn't persist after 2*DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                };
+                endswitches_triggered=0; // abort and re-enable guarded event above
               }
-              break;
+              endwitch_val_counter+=1;
 
+              break;
 #endif
 
 

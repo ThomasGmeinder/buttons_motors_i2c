@@ -273,7 +273,7 @@ int motor_endswitches_triggered(unsigned endswitches_val, unsigned mask) {
   return 1;
 }
 
-void process_error(motor_state_s* ms, client register_if reg, motor_error_t err) {
+void register_error(motor_state_s* ms, client register_if reg, motor_error_t err) {
    if(err == ms->error) {
      // ignore if same error is repeatedly set. 
      // That should ensure that CLEAR_ERROR_BIT is not overwritten before it is read by the server
@@ -313,7 +313,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 
    unsigned call_stop_motor = 0;
    if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN | ENDSWITCH_CLOSED)) {
-      process_error(ms, reg, BOTH_ENDSWITCHES_ON);  
+      register_error(ms, reg, BOTH_ENDSWITCHES_ON);  
       if(ms->error != BOTH_ENDSWITCHES_ON) {
        printf("Fatal Error: Both Endswitches on Motor %d triggered at the same time\n", ms->motor_idx);
        call_stop_motor = 1;
@@ -330,18 +330,18 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
          ms->target_position = ms->position; 
          // Wrong Endswitch is on. 
          // Either motor did not start running or is running in the wrong direction.
-         process_error(ms, reg, OPEN_ES_WHILST_CLOSING);  
+         register_error(ms, reg, OPEN_ES_WHILST_CLOSING);  
          call_stop_motor = 1;
        }
      } else if(ms->state == OPENING) {       
         printf("Motor %d open endswitch triggered whilst opening\n", ms->motor_idx);
         if(OPEN_POS_ES - ms->position > OPEN_TOLERANCE) {
            printf("OPENING speed slower than estimate. Position is at %d mm when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
-           process_error(ms, reg, MOTOR_TOO_SLOW); // Motor slower than estimation
+           register_error(ms, reg, MOTOR_TOO_SLOW); // Motor slower than estimation
         } 
         else if(ms->position - OPEN_POS_ES > OPEN_TOLERANCE) {
            printf("OPENING speed faster than estimate. Position is at %d mm when it should be at OPEN_POS_ES %d\n", UM_to_MM(ms->position), OPEN_POS_ES);
-           process_error(ms, reg, MOTOR_TOO_FAST); // Motor faster than estimation
+           register_error(ms, reg, MOTOR_TOO_FAST); // Motor faster than estimation
         };
         ms->position = OPEN_POS_ES;
         ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position
@@ -363,7 +363,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
          ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position 
          // Wrong Endswitch is on. 
          // Either motor did not start running or is running in the wrong direction.
-         process_error(ms, reg, CLOSED_ES_WHILST_OPENING); // Wrong Endswitch triggered. 
+         register_error(ms, reg, CLOSED_ES_WHILST_OPENING); // Wrong Endswitch triggered. 
          call_stop_motor = 1;
        }
      } 
@@ -371,11 +371,11 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
         printf("Motor %d closed endswitch triggered whilst closing\n", ms->motor_idx);
         if(CLOSED_POS_ES - ms->position > CLOSED_TOLERANCE) {
            printf("CLOSING speed faster than estimate. Position is at %d mm when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
-           process_error(ms, reg, MOTOR_TOO_FAST); // Motor slower than estimation
+           register_error(ms, reg, MOTOR_TOO_FAST); // Motor slower than estimation
         }   
         else if(ms->position - CLOSED_POS_ES > CLOSED_TOLERANCE) {
           printf("CLOSING speed slower than estimate. Position is at %d mm when it should be at CLOSED_POS_ES %d\n", UM_to_MM(ms->position), CLOSED_POS_ES);
-          process_error(ms, reg, MOTOR_TOO_SLOW); // Motor slower than estimation
+          register_error(ms, reg, MOTOR_TOO_SLOW); // Motor slower than estimation
         }
         ms->position = CLOSED_POS_ES;
         ms->target_position = ms->position; // Endswitch was triggered. Syncrhonise Position 
@@ -471,7 +471,7 @@ void init_motor_position_and_error(motor_state_s* ms, client register_if reg, ch
     ms->prev_error = NO_ERROR;
     ms->state = STOPPED;
 
-    process_error(ms, reg, error); 
+    register_error(ms, reg, error); 
 #if ENDSWITCHES_CONNECTED
       unsigned endswitches_val;
       p_endswitches :> endswitches_val;
@@ -488,10 +488,10 @@ void init_motor_position_and_error(motor_state_s* ms, client register_if reg, ch
 
     if(ms->position == INT_MIN) {
       printf("Error: Could not determine valid position from flash for Motor %d: %d um\n", ms->motor_idx, ms->position);
-      process_error(ms, reg, POSITION_UNKNOWN);      
+      register_error(ms, reg, POSITION_UNKNOWN);      
     } else if(!position_in_range(ms->position)) {
       printf("Error: Position is out of range for Motor %d: %d um\n", ms->motor_idx, ms->position);
-      process_error(ms, reg, OUT_OF_RANGE);     
+      register_error(ms, reg, OUT_OF_RANGE);     
     } else {
       printf("Determined valid position for Motor %d: %d um\n", ms->motor_idx, ms->position);
       if(ms->position != motor_pos_flash) ms->update_flash = 1;
@@ -555,7 +555,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
            ms->position = ms->target_position + CLOSED_TOLERANCE;
 
            stop_motor(ms, reg);
-           process_error(ms, reg, MOTOR_TOO_SLOW);
+           register_error(ms, reg, MOTOR_TOO_SLOW);
            
            return;
          }
@@ -585,7 +585,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
            // fix position. This is key to avoid range error. 
            ms->position = ms->target_position - OPEN_TOLERANCE;       
            stop_motor(ms, reg);
-           process_error(ms, reg, MOTOR_TOO_SLOW);
+           register_error(ms, reg, MOTOR_TOO_SLOW);
            
            return;
          } 
@@ -608,7 +608,7 @@ void check_and_handle_new_pos(motor_state_s* ms, client register_if reg) {
    }
  
    if(!position_in_range(ms->position)) {
-      process_error(ms, reg, OUT_OF_RANGE);
+      register_error(ms, reg, OUT_OF_RANGE);
    }
 
 }
@@ -839,7 +839,7 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
             } else if (!ms->AC_current_on) {
                printf("ERROR: Motor %d should be running but no AC current was detected\n\n", ms->motor_idx);
                stop_motor(ms, reg);
-               process_error(ms, reg, POSITION_UNKNOWN);
+               register_error(ms, reg, POSITION_UNKNOWN);
             }
           }
        }
@@ -851,7 +851,7 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
              if(ms->AC_current_on) {
                 printf("WARNING: Motor current sensor detected current in Motor %d after it was switched off!\n", ms->motor_idx);
                 stop_motor(ms, reg);
-                process_error(ms, reg, POSITION_UNKNOWN);
+                register_error(ms, reg, POSITION_UNKNOWN);
                 
              }
            }
@@ -865,7 +865,7 @@ void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c) {
   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
   // clear all errors
 
-  process_error(ms, reg, NO_ERROR);
+  register_error(ms, reg, NO_ERROR);
 
   printf("Clearing Errors for Motor %d\n", ms->prev_error, ms->motor_idx);
   reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, CLEAR_ERROR_BIT); 

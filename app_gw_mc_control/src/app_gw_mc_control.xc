@@ -14,27 +14,43 @@
 // - Web server sends close command with a new target position. A: start_motor CLOSING with target position X
 // - Web server sends open command with a new target position. A: start_motor OPENING with target position X
 // Note: When a I2C command comes in from the server whilst the motor is running, then ignore it
+// - When Error(s) with severity > 0 are detected then motor control is disabled and the control buttons light up red
+// - Errors can be cleared by the operator by pressing both buttons at the same time. 
+//   Note: Before clearing the buttons the operator has to ensure that the error was rectified. 
+//         E.g. by closing the ventilation manually until an Endswitch is triggered (only supported in ES configuration) 
 
-/************* Flash firmware ********************/
+/************ Error Detection *********************/
+// See comments for enum motor_error_t
+
+/************* Installation ********************/
+// Make sure both verntilations are closed and closed Endswitches triggered
 // Flash with 8k Datapartition: xflash <chosen .xe file> --boot-partition-size 516096
+// After flash completes the Motor controller should start up with no errors (LEDs off)
 
 /************* Test Protocol for ES configuration *********************/
-// Switch both Endswitches on: 
-//   BOTH_ENDSWITCHES_ON is correctly flagged via I2C and displayed in Browser
-//   Both Buttons light up red
-//   The error is correctly cleared when one of the Endswitches is switched off.
-// When flash is empty (no known position) and no Endswitch is triggered:
-//   POSITION_UNKNOWN error is correctly flagged via I2C and displayed in the Browser
-//   Both Buttons light up red
-//   The error is correctly cleared when one of the Endswitches is switched on. Works with multiple errors!
+// Switch both Endswitches on: BOTH_ENDSWITCHES_ON is correctly reported
+//   Clear the error by pushing both buttons. Error should occur again.
+//   Switch one of the Endswitches off to establish a known position 
+//   Clear the error by pushing both buttons. Error should now be cleared
+// When flash is empty (no known position) and no Endswitch is triggered: POSITION_UNKNOWN error is correctly reported.
+//   Clear the error by pushing both buttons. Error should occur again.
+//   Activate one of the Endswitches to establish a known position
+//   Clear the error by pushing both buttons. Error should now be cleared
 // Open/close ventilation with buttons and no Endswitches: MOTOR_TOO_SLOW error is correctly reported.
 // Trigger Open Endswitch whilst Motor is Opening: MOTOR_TOO_FAST error is correctly reported
-// Trigger Open Endswitch whilst Motor is Closing: POSITION_UNKNOWN error is correctly reported. Can be cleeared by triggering Endswitch again.
-// Trigger Closed Endswitch whilst Motor is Opening: POSITION_UNKNOWN error is correctly reported. Can be cleeared by triggering Endswitch again.
+// Trigger Open Endswitch whilst Motor is Closing: OPEN_ES_WHILST_CLOSING error is correctly reported. 
+// Trigger Closed Endswitch whilst Motor is Opening: CLOSED_ES_WHILST_OPENING error is correctly reported. 
 // Trigger Closed Endswitch whilst Motor is Closing: MOTOR_TOO_FAST error is correctly reported
 // Trigger Open Endwitch correctly. check that motor position was synchronised to OPEN_POS_ES
 // Trigger Closed Endwitch correctly. check that motor position was synchronised to CLOSED_POS_ES
+// Trigger and hold Open Endswitch and Close. OPEN_ES_WHILST_CLOSING error is correctly reported.
+// Trigger and hold Closed Endswitch and Open. CLOSED_ES_WHILST_OPENING error is correctly reported.
 
+// Note: In every case, check that the error can be cleared by pressing both buttons
+//       In case of BOTH_ENDSWITCHES_ON the error will occur again if both endswitches are still triggered. Test this.
+//       In case of POSITION_UNKNOWN the error will occur again unless one of the Endswitches is active. Test this.
+//       If the error is successfully cleared, the red LEDs on the controller should go off and on the server the Error should disappear.
+ 
 /************* Test Protocol for AC_sensor configuration *********************/
 // For each motor:
 // Open/close ventilation with motor disconnected. POSITION_UNKNOWN error should occur 
@@ -54,6 +70,10 @@
 //    else endswitch was triggered computed position was between OPEN_POS_ES and OPEN_POS_MIN and no error will be displayed
 //       check that motor position was synchronised to OPEN_POS_ES
 
+/************** General Tests *************/
+// Reset or power cycle the XMOS controller and check that Motor Position and Errors are correctly restored.
+// Check that when a severity>0 error occurred then the Motors cannot be switched on using push buttons or browser.
+
 /************* Todo *********************/
 // Try to make sure that target_mp is always reached. Then the tolerances on the server can be set to 0.
 // Change relais control signals to active low. Relais inputs are pulled high on he releais so default (high) should mean off
@@ -63,9 +83,8 @@
 // Issues:
 // AC_sensor: POSITION_UNKNOWN error after reset of Board.
 // Error clear mechanism doesn't always work. Sometimes error remains in browser
-// Todo: Review the whole error clearing mechanism. It breaks down after board is reset and prev_error is cleared
-// E.g.: Introduce a new error reset bit "clear all errors" in addtion to "clear previous error"
-// "clear all errors" would be set when the error clear button is pressed
+// MOTOR_TOO_SLOW not flagged in a reliable manner
+// POSITION_UNKOWN error not cleared when clearing multiple times with buttons and not endswitches triggered
 
 // New spec for registiering and clearing errors:
 // Errors can only be cleared by the operator pressing both control buttons. 

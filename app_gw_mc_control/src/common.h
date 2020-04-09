@@ -59,10 +59,11 @@ typedef enum {
 // Errors with severity
 typedef enum {
     NO_ERROR, 
-    MOTOR_TOO_SLOW, 
-    MOTOR_TOO_FAST, 
-    POSITION_UNKNOWN,
-    OUT_OF_RANGE,
+    MOTOR_TOO_SLOW, // Endswitch was not detected when end position is reached (OPEN_POS_ES-OPEN_TOLERANCE or CLOSED_POS_ES+CLOSED_TOLERANCE) 
+    MOTOR_TOO_FAST, // Endswitch was detected before end position is reached (TBD)
+    POSITION_UNKNOWN, // Motor is not running. This is detected by no AC current after motor was switched on (in AC_sensor config) 
+    OUT_OF_RANGE, // The computed position is outside of the valid range OPEN_POS_MIN..CLOSED_POS_MAX
+    // The remaining errors are only supported in ES configuration:
     BOTH_ENDSWITCHES_ON, 
     CLOSED_ES_WHILST_OPENING, // Motor is running in wrong direction or not at all !
     OPEN_ES_WHILST_CLOSING, // Motor is running in wrong direction or not at all!

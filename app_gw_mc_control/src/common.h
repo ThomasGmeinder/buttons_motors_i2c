@@ -2,11 +2,7 @@
 #define _common_h_
 
 
-#if INFER_ENDSWITCHES_WITH_AC_SENSOR
 #define SW_VERSION 20  // version 2.0
-#else
-#define SW_VERSION 13  // version 1.3
-#endif
 
 #define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
 

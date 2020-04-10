@@ -130,8 +130,8 @@
 
 #define DISTANCE_BETWEEN_ES = CLOSED_POS_ES-OPEN_POS_ES
 
-// 2*125ms are needed because switching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
-#define DEBOUNCE_TIME XS1_TIMER_HZ/8 // pressed value is registerd after 2 * DEBOUNCE_TIME
+// 250ms are needed because switching motor on/off creates current spikes which induce glitches on the Motorcontroller I/Os
+#define DEBOUNCE_TIME XS1_TIMER_HZ/4 // pressed value is registered after DEBOUNCE_TIME
 #define FLASH_UPDATE_PERIOD_CYCLES POS_UPDATE_PERIOD_CYCLES*20 // Update flash every 2 seconds
 
 #define LED_CYCLES (XS1_TIMER_HZ/10) // 100ms
@@ -166,16 +166,21 @@
 // raspiviv
 // nX9NypBk
 
+#define HW_VERSION 1
+
 /** Inputs **/
 // Endswitches for both Motors
 #if ENDSWITCHES_CONNECTED
 // Motor 0: bits 1:0
 // Motor 1: bits 3:2
+#if HW_VERSION==1
+on MC_TILE : in port p_endswitches = XS1_PORT_4C; // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
+on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33 
+#else
 on MC_TILE : in port p_endswitches = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33 
-#else 
-// access SW1 on the board.
-on MC_TILE : in port p_error_buttons = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33 
-#endif 
+on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4C; // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
+#endif
+#endif
 
 // Button to open and close the ventilations
 on MC_TILE : in port p_control_buttons = XS1_PORT_4D;  // X0D16, X0D17, X0D18, X0D19
@@ -197,7 +202,7 @@ on MC_TILE : port p_slave_scl = XS1_PORT_1N; // X0D37 // connect to GPIO 2 on rP
 on MC_TILE : port p_led = XS1_PORT_4F;
 
 on MC_TILE : port p_m0_pushbutton_leds = XS1_PORT_4A; // X0D02, X0D03, X0D08, X0D09
-on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4C; // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
+
 
 on MC_TILE: otp_ports_t otp_ports = OTP_PORTS_INITIALIZER;
 
@@ -224,6 +229,15 @@ int severity_lookup[NUM_ERRORS] = {
     2, 
     2,
 };
+
+int get_error_severity(motor_error_t error) {
+  if(error>=NUM_ERRORS) {
+     printf("Invalid motor_error_t value %d\n",error);
+     return 3;
+  } else {
+     return severity_lookup[error];
+  }
+}
 
 void delay_us(unsigned time_us) {
   int t;
@@ -320,7 +334,8 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
      }
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN)) {
      if(ms->state == CLOSING) {    
-       if(ms->position >= OPEN_POS_ES-OPEN_TOLERANCE && ms->position <= OPEN_POS_ES+OPEN_TOLERANCE) { 
+       // Use 2*OPEN_TOLERANCE for inner limmit, OPEN_TOLERANCE for outer limit
+       if(ms->position >= OPEN_POS_ES-OPEN_TOLERANCE && ms->position <= OPEN_POS_ES+2*OPEN_TOLERANCE) { 
          // The position is close to the Open Endswitch. 
          // Special case It's possible that that Open Endwitch overruns and is triggered again when closing
          printf("Open Endwitch triggered again when Motor %d is CLOSING. Ignore this event\n", ms->motor_idx);
@@ -353,7 +368,8 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
      if(ms->state == OPENING) {   
-       if(ms->position >= CLOSED_POS_ES-CLOSED_TOLERANCE && ms->position <= CLOSED_POS_ES+CLOSED_TOLERANCE) { 
+       // Use 2*OPEN_TOLERANCE for inner limmit, OPEN_TOLERANCE for outer limit
+       if(ms->position >= CLOSED_POS_ES-2*CLOSED_TOLERANCE && ms->position <= CLOSED_POS_ES+CLOSED_TOLERANCE) { 
          // The position is close to the Closed Endswitch. 
          // It's possible that that closed Endwitch overruns and is triggered again when closing
          printf("Closed Endwitch triggered again when Motor %d is OPENING. Ignore this event\n", ms->motor_idx);
@@ -399,7 +415,7 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
      return;
   }
 
-  if(severity_lookup[ms->error]>0) {
+  if(get_error_severity(ms->error)>0) {
     printf("Motor %d is in ERROR state with ERROR code %d (Severity > 0), ignoring control button change\n", ms->motor_idx, ms->error);
     return;
   }
@@ -669,7 +685,7 @@ void update_pushbutton_leds(motor_state_s* ms) {
    }
 
    // Error overrides above
-   if(severity_lookup[ms->error]>0) {
+   if(get_error_severity(ms->error)>0) {
      // notify the user that there is an error with severity > 0
      led_on_mask = (1 << MOTOR_OPEN_BUTTON_RED_LED_IDX) | (1 << MOTOR_CLOSE_BUTTON_RED_LED_IDX);
    }
@@ -884,9 +900,9 @@ void mc_control(client register_if reg, chanend flash_c) {
     timer tmr_dbc; // debounce tiemr for p_control_buttons
 
     int t_dbc, t_pos;  // time variables
-
+    int next_button_sample_time;
     unsigned control_buttons_pressed = 0;
-    unsigned prev_control_buttons_val, control_buttons_val_before_change;
+    unsigned prev_control_buttons_val;
     unsigned control_buttons_counter = 0;
 
     const unsigned all_buttons_off = CONTROL_BUTTON_PRESSED==0 ? 0b1111 : 0;
@@ -1002,40 +1018,49 @@ void mc_control(client register_if reg, chanend flash_c) {
               control_buttons_pressed = 1; // activate timer case below
               control_buttons_counter = 0; // reset counter
               tmr_dbc :> t_dbc; // update timer
+              next_button_sample_time = t_dbc + DEBOUNCE_TIME/4;
               break;
 
             // debounce p_control_buttons
-            case (control_buttons_pressed) => tmr_dbc when timerafter(t_dbc+DEBOUNCE_TIME) :> t_dbc:
+            case (control_buttons_pressed) => tmr_dbc when timerafter(next_button_sample_time) :> t_dbc:
+              next_button_sample_time = t_dbc + DEBOUNCE_TIME/4;
               unsigned control_buttons_val;
               p_control_buttons :> control_buttons_val;
               if(control_buttons_counter==0) {
                 if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons port value changed to 0x%x\n", control_buttons_val);
-                // just store the current value
-                prev_control_buttons_val = control_buttons_val;
               } else if(control_buttons_counter==1) {
+                if(control_buttons_val != prev_control_buttons_val) { // The button change persistet -> No glitch
+                  if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after 3/4 DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                  control_buttons_pressed = 0; // abort and re-enable guarded event above (case (!control_buttons_pressed))
+                }
+              } else if(control_buttons_counter==2) {
                 if(control_buttons_val == prev_control_buttons_val) { // The button change persistet -> No glitch
+                  // Same value was now sampled 3 times!. Register it now after a total of DEBOUNCE_TIME cycles
                   unsigned control_buttons_m0 = control_buttons_val & 0b11;
                   unsigned control_buttons_m1 = (control_buttons_val >> 2) & 0b11;
                   printf("Motor Control Buttons pressed. Value: %x\n", control_buttons_val);
                   check_control_buttons_and_update_states(control_buttons_m0, &state_m0, reg, flash_c); 
                   check_control_buttons_and_update_states(control_buttons_m1, &state_m1, reg, flash_c); 
                 } else {
-                  if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after 2*DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                  if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                  control_buttons_pressed = 0; // abort and re-enable guarded event above (case (!control_buttons_pressed))
                 }
-              } else if(control_buttons_counter>1) {
+              } else if(control_buttons_counter>2) {
                 // Have to wait for button release! 
                 // Otherwise pressing for longer than 2*DEBOUNCE_TIME will be considered as button pressed again. 
                 if(control_buttons_val == all_buttons_off) {
                   control_buttons_pressed = 0; // this will re-enable the case (!control_buttons_pressed)
                 }
               }
+              prev_control_buttons_val = control_buttons_val;
               control_buttons_counter += 1;
               break;
 
 #if ENDSWITCHES_CONNECTED            
             // Endswitches are connected with a cable
             // Monitor Endswitches. Event fires when one or more Endswitches are triggered
-            // 
+            // Note: When this logic is changed to sample 3 times (like the p_control_buttons logic above) timing errors occur/
+            //       I.e. timer events seem to be missed. Todo: investigate!
             case (!endswitches_triggered) => p_endswitches when pinsneq(all_ES_off) :> int:
               // Port value changed which means some switch was pressed or released
               endswitches_triggered = 1; // activate timer case below
@@ -1048,7 +1073,7 @@ void mc_control(client register_if reg, chanend flash_c) {
             // Then wait another DEBOUNCE_TIME and sample again to see if the value persisted
             // If value persisted process it.
             // else re-enable the above event
-            case (endswitches_triggered) =>  tmr_dbc_es when timerafter(t_dbc_es+DEBOUNCE_TIME) :> t_dbc_es:
+            case (endswitches_triggered) =>  tmr_dbc_es when timerafter(t_dbc_es+DEBOUNCE_TIME/2) :> t_dbc_es:
               unsigned endswitches_val;
               p_endswitches :> endswitches_val;
 
@@ -1068,7 +1093,7 @@ void mc_control(client register_if reg, chanend flash_c) {
                 } else {
                   if(DEBUG_BUTTON_LOGIC) printf("p_endswitches value change ignored. Value 0x%x didn't persist after 2*DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
                 };
-                endswitches_triggered=0; // abort and re-enable guarded event above
+                endswitches_triggered=0; // abort and re-enable guarded event above (case (!endswitches_triggered))
               }
               endwitch_val_counter+=1;
 

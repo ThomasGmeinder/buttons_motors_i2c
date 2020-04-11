@@ -173,7 +173,7 @@
 // raspiviv
 // nX9NypBk
 
-#define HW_VERSION 2
+#define HW_VERSION 1
 
 /** Inputs **/
 // Endswitches for both Motors
@@ -343,8 +343,7 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
      }
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_OPEN)) {
      if(ms->state == CLOSING) {    
-       // Use 2*OPEN_TOLERANCE for inner limmit, OPEN_TOLERANCE for outer limit
-       if(ms->position >= OPEN_POS_ES-OPEN_TOLERANCE && ms->position <= OPEN_POS_ES+2*OPEN_TOLERANCE) { 
+       if(ms->position >= OPEN_POS_ES-OPEN_TOLERANCE && ms->position <= OPEN_POS_ES+OPEN_TOLERANCE) { 
          // The position is close to the Open Endswitch. 
          // Special case It's possible that that Open Endwitch overruns and is triggered again when closing
          printf("Open Endwitch triggered again when Motor %d is CLOSING. Ignore this event\n", ms->motor_idx);
@@ -377,8 +376,8 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 
    } else if(motor_endswitches_triggered(motor_endswitches, ENDSWITCH_CLOSED)) {
      if(ms->state == OPENING) {   
-       // Use 2*OPEN_TOLERANCE for inner limmit, OPEN_TOLERANCE for outer limit
-       if(ms->position >= CLOSED_POS_ES-2*CLOSED_TOLERANCE && ms->position <= CLOSED_POS_ES+CLOSED_TOLERANCE) { 
+       // Use OPEN_TOLERANCE for inner limmit, OPEN_TOLERANCE for outer limit
+       if(ms->position >= CLOSED_POS_ES-CLOSED_TOLERANCE && ms->position <= CLOSED_POS_ES+CLOSED_TOLERANCE) { 
          // The position is close to the Closed Endswitch. 
          // It's possible that that closed Endwitch overruns and is triggered again when closing
          printf("Closed Endwitch triggered again when Motor %d is OPENING. Ignore this event\n", ms->motor_idx);
@@ -927,6 +926,7 @@ void input_server(streaming chanend input_events, chanend get_input_port_c) {
 #if ENDSWITCHES_CONNECTED
     timer tmr_dbc_es;  
     int t_dbc_es;
+    int next_ES_sample_time;
     unsigned endswitches_triggered = 0;
     unsigned prev_endswitches_val;
     unsigned endwitch_val_counter=0;
@@ -981,7 +981,7 @@ void input_server(streaming chanend input_events, chanend get_input_port_c) {
               next_button_sample_time = t_dbc + DEBOUNCE_TIME/4;
               break;
 
-            // debounce p_control_buttons
+            // debounce p_control_buttons by sampling 3 times in a DEBOUNCE_TIME/4 interval
             case (control_buttons_pressed) => tmr_dbc when timerafter(next_button_sample_time) :> t_dbc:
               next_button_sample_time = t_dbc + DEBOUNCE_TIME/4;
               unsigned control_buttons_val;
@@ -1013,48 +1013,49 @@ void input_server(streaming chanend input_events, chanend get_input_port_c) {
               control_buttons_counter += 1;
               break;
 
+
 #if ENDSWITCHES_CONNECTED            
-            // Monitor control buttons with temporal statemachine
             // Endswitches are connected with a cable
-            // Event fires when one or more Endswitches are triggered
-            // Note: When this logic is changed to sample 3 times (like the p_control_buttons logic above) timing errors occur/
-            //       I.e. timer events seem to be missed. Todo: investigate!
+            // Monitor Endswitches with temporal statemachine
+            // Event fires when one or more Endswitches are triggered              
             case (!endswitches_triggered) => p_endswitches when pinsneq(all_ES_off) :> int:
               // Port value changed which means some switch was pressed or released
               endswitches_triggered = 1; // activate timer case below
               endwitch_val_counter = 0;  // reset counter
               tmr_dbc_es :> t_dbc_es; // update timer
+              next_ES_sample_time = t_dbc_es + DEBOUNCE_TIME/4;
               break;
 
-            // debounce p_endswitches
-            // When endswitches_triggered was set by the above event, sample p_endswitches after DEBOUNCE_TIME
-            // Then wait another DEBOUNCE_TIME and sample again to see if the value persisted
-            // If value persisted process it.
-            // else re-enable the above event
-            case (endswitches_triggered) =>  tmr_dbc_es when timerafter(t_dbc_es+DEBOUNCE_TIME/2) :> t_dbc_es:
+            // debounce p_endswitches by sampling 3 times in a DEBOUNCE_TIME/4 interval
+            case (endswitches_triggered) =>  tmr_dbc_es when timerafter(next_ES_sample_time) :> t_dbc_es:
+              next_ES_sample_time = t_dbc_es + DEBOUNCE_TIME/4;
               unsigned endswitches_val;
               p_endswitches :> endswitches_val;
 
-              int endswitches_val_persisted = 0;
               if(endwitch_val_counter==0) {
                 printf("Endswitches triggered. new value 0x%x\n", endswitches_val);
-                prev_endswitches_val = endswitches_val; // store it to compare next time
               }
               else if(endwitch_val_counter==1) {
+                if(endswitches_val!=prev_endswitches_val) {
+                  if(DEBUG_BUTTON_LOGIC) printf("p_endswitches value change ignored. Value 0x%x didn't persist after 3/4 DEBOUNCE_TIME and was a glitch\n", prev_control_buttons_val);
+                  endswitches_triggered = 0; // abort and re-enable guarded event above (case (!control_buttons_pressed))
+                }
+              }
+              else if(endwitch_val_counter==2) {
                 if(endswitches_val==prev_endswitches_val) {
+                  // Same value was now sampled 3 times!. Register it now after a total of DEBOUNCE_TIME cycles
                   printf("Endswitches changed to value 0x%x\n", endswitches_val);
                   int output_val = endswitches_val | ES_MARKER;
-                  input_events <: output_val;
-                } else {
-                  if(DEBUG_BUTTON_LOGIC) printf("p_endswitches value change ignored. Value 0x%x didn't persist after 2*DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                  input_events <: output_val;                } else {
+                  if(DEBUG_BUTTON_LOGIC) printf("p_endswitches value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
                 };
                 endswitches_triggered=0; // abort and re-enable guarded event above (case (!endswitches_triggered))
               }
+              prev_endswitches_val = endswitches_val; // store it to compare next time
               endwitch_val_counter+=1;
 
               break;
 #endif
-
         }
 
     }

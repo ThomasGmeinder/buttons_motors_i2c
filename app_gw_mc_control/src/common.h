@@ -2,7 +2,7 @@
 #define _common_h_
 
 
-#define SW_VERSION 20  // version 2.0
+#define SW_VERSION 21  // version 2.1
 
 #define POS_UPDATE_PERIOD_CYCLES (XS1_TIMER_HZ/10) // update every 0.1 seconds
 

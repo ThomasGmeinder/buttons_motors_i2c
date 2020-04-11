@@ -162,11 +162,18 @@
 
 #define MC_TILE tile[0]
 
+#define BUTTONS_IDX 1
+#define ES_IDX 2
+
+// Use top byte to distinguish I/O 
+#define BUTTONS_MARKER (BUTTONS_IDX<<28)
+#define ES_MARKER (ES_IDX<<28)
+
 // Login raspiviv
 // raspiviv
 // nX9NypBk
 
-#define HW_VERSION 1
+#define HW_VERSION 2
 
 /** Inputs **/
 // Endswitches for both Motors
@@ -180,6 +187,8 @@ on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0
 on MC_TILE : in port p_endswitches = XS1_PORT_4E; // X0D26, X0D27, X0D32, X0D33 
 on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4C; // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
 #endif
+#else 
+on MC_TILE : port p_m1_pushbutton_leds = XS1_PORT_4C; // X0D14 (pin 0), X0D15, X0D20, X0D21 (pin 3)
 #endif
 
 // Button to open and close the ventilations
@@ -253,8 +262,8 @@ void update_position_regs(motor_state_s* ms, client register_if reg);
 
 void init_motor(motor_state_s* ms, client register_if reg, 
   unsigned opening_speed, unsigned closing_speed,
-  unsigned motor_idx, chanend flash_c);
-void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c);
+  unsigned motor_idx, chanend flash_c, chanend get_input_port_c_c);
+void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c, chanend get_input_port_c);
 
 // Functions
 unsigned bit_set(unsigned bit_index, unsigned portval) {
@@ -407,11 +416,12 @@ void check_endswitches_and_update_states(unsigned motor_endswitches, motor_state
 
 }
 
-void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg, chanend flash_c) {
+void check_control_buttons_and_update_states(unsigned motor_control_buttons, motor_state_s* ms, client register_if reg, 
+  chanend flash_c, chanend get_input_port_c) {
   // Ignore button in case of severe errors
   const unsigned both_buttons_pressed = CONTROL_BUTTON_PRESSED==1 ? 0b11 : 0;  
   if(motor_control_buttons == both_buttons_pressed) {
-     clear_errors(ms, reg, flash_c);
+     clear_errors(ms, reg, flash_c, get_input_port_c);
      return;
   }
 
@@ -459,7 +469,8 @@ void check_control_buttons_and_update_states(unsigned motor_control_buttons, mot
   }
 }
 
-void init_motor_position_and_error(motor_state_s* ms, client register_if reg, chanend flash_c) {
+void init_motor_position_and_error(motor_state_s* ms, client register_if reg, 
+  chanend flash_c, chanend get_input_port_c) {
     printf("init_motor_position_and_error for Motor %d\n",ms->motor_idx);
 
     int motor_pos_flash = INT_MIN; // invalid by default
@@ -490,10 +501,11 @@ void init_motor_position_and_error(motor_state_s* ms, client register_if reg, ch
     register_error(ms, reg, error); 
 #if ENDSWITCHES_CONNECTED
       unsigned endswitches_val;
-      p_endswitches :> endswitches_val;
-      endswitches_val = (endswitches_val>>ms->motor_idx*2) & 0b11;
+      get_input_port_c <: ES_IDX;
+      get_input_port_c :> endswitches_val;
+      int motor_endswitches_val = (endswitches_val>>ms->motor_idx*2) & 0b11;
       // Derive initial position from Endswitches. This will override ms->position if a Endswitch is triggered
-      check_endswitches_and_update_states(endswitches_val, ms, reg);
+      check_endswitches_and_update_states(motor_endswitches_val, ms, reg);
 #else
       // Initial position cannot be derived from Endswitches.
       if(motor_pos_flash == INT_MIN) { // Position in flash is invalid
@@ -503,7 +515,7 @@ void init_motor_position_and_error(motor_state_s* ms, client register_if reg, ch
 #endif
 
     if(ms->position == INT_MIN) {
-      printf("Error: Could not determine valid position from flash for Motor %d: %d um\n", ms->motor_idx, ms->position);
+      printf("Error: Could not determine valid position for Motor %d: %d um\n", ms->motor_idx, ms->position);
       register_error(ms, reg, POSITION_UNKNOWN);      
     } else if(!position_in_range(ms->position)) {
       printf("Error: Position is out of range for Motor %d: %d um\n", ms->motor_idx, ms->position);
@@ -521,14 +533,14 @@ void init_motor_position_and_error(motor_state_s* ms, client register_if reg, ch
 // speeds are in um/s
 void init_motor(motor_state_s* ms, client register_if reg, 
   unsigned opening_speed, unsigned closing_speed,
-  unsigned motor_idx, chanend flash_c) {
+  unsigned motor_idx, chanend flash_c, chanend get_input_port_c) {
     printf("//// init_motor for Motor %d\n",motor_idx);
 
     ms->motor_idx = motor_idx;
     ms->actuator = BUTTON;
     ms->state = STOPPED;
 
-    init_motor_position_and_error(ms, reg, flash_c);
+    init_motor_position_and_error(ms, reg, flash_c, get_input_port_c);
 
     ms->open_button_blink_counter = 0;
     ms->close_button_blink_counter = 0;
@@ -876,30 +888,35 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
 }
 #endif
 
-void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c) {
+void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c, chanend get_input_port_c) {
 
   int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
-  // clear all errors
-
-  register_error(ms, reg, NO_ERROR);
-
+  // clear all errors on server
   printf("Clearing Errors for Motor %d\n", ms->prev_error, ms->motor_idx);
   reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, CLEAR_ERROR_BIT); 
 
-  // re-initialise. This may cause new errors
-  init_motor_position_and_error(ms, reg, flash_c);
-
+  if(get_error_severity(ms->error)>0) { 
+    // Only clear severity>0 errors. Severity 0 Errors are warnings which are automatically cleared on the Server
+    // Also, if this is done whilst Motors are in normal operation (Operator accidentally presses both buttons whilst motor is running)
+    // this causes Errors.
+    register_error(ms, reg, NO_ERROR);
+    // re-initialise. This may cause new errors
+    init_motor_position_and_error(ms, reg, flash_c, get_input_port_c);
+  }
 }
 
 // global shared memory
 motor_state_s state_m0, state_m1;
 
-void mc_control(client register_if reg, chanend flash_c) {
+// Process input ports in separate task to guarantee stability of the temporal debounce statemachines 
+// use a streaming channel to dedouple from the receiving task (to avoid blocking on the first data)
+void input_server(streaming chanend input_events, chanend get_input_port_c) {
 
-    timer tmr_pos;
+
+    unsigned port_index;
+
     timer tmr_dbc; // debounce tiemr for p_control_buttons
-
-    int t_dbc, t_pos;  // time variables
+    int t_dbc;  // time variables
     int next_button_sample_time;
     unsigned control_buttons_pressed = 0;
     unsigned prev_control_buttons_val;
@@ -915,31 +932,9 @@ void mc_control(client register_if reg, chanend flash_c) {
     unsigned endwitch_val_counter=0;
 
     const unsigned all_ES_off = ES_TRIGGERED==0 ? 0b1111 : 0;
-#else
-    timer tmr_dbc_errors;
-    int t_dbc_errors;
-    // when Endswitches are not connected, a button on the XMOS board is used to clear the error
-    unsigned error_buttons_changed = 0;
-    unsigned prev_error_buttons_val, error_buttons_val_before_change;
 #endif
 
-    unsigned led_val = 0;
-
-    char mac_address[6];
-    // Read MAC address:  
-    otp_board_info_get_mac(otp_ports, 0, mac_address);
-    printf("Read MAC Address");
-    for(unsigned i=0; i<6; ++i) printf("0x%x ",mac_address[i]);
-    printf("\n");  
-    // Store lowest byte of Mac address as unique ID controller 
-    char id = mac_address[5];
-    reg.set_register(SYSTEM_ID_REG_OFFSET, id);
-
-    printf("Starting Greenhouse Motor Control Application on Controller with ID 0x%x\n\n", id);
-
-
 #if ENABLE_INTERNAL_PULLS
-
   #if ENDSWITCHES_CONNECTED
     // Enable pull resistors to make signals de-asserted by default
     #if ES_TRIGGERED==1
@@ -959,10 +954,141 @@ void mc_control(client register_if reg, chanend flash_c) {
     #endif
 #endif
 
+    while(1) {
+        select {
+            case get_input_port_c :> port_index:
+              unsigned port_value;
+              if(port_index == BUTTONS_IDX) {
+                p_control_buttons :> port_value;
+                get_input_port_c <: port_value;
+              } 
+#if ENDSWITCHES_CONNECTED
+              else if(port_index == ES_IDX) {
+                p_endswitches :> port_value;
+                get_input_port_c <: port_value;
+              }
+#endif
+              break;
+
+            // Monitor control buttons with temporal statemachine
+            // After one or more buttons are pressed, sample the value three times to ensure it persists
+            // If it doesn't persist it was a glitch and will be ignored
+            case (!control_buttons_pressed) => p_control_buttons when pinsneq(all_buttons_off) :> int:
+              // Port value changed which means some button was pressed 
+              control_buttons_pressed = 1; // activate timer case below
+              control_buttons_counter = 0; // reset counter
+              tmr_dbc :> t_dbc; // update timer
+              next_button_sample_time = t_dbc + DEBOUNCE_TIME/4;
+              break;
+
+            // debounce p_control_buttons
+            case (control_buttons_pressed) => tmr_dbc when timerafter(next_button_sample_time) :> t_dbc:
+              next_button_sample_time = t_dbc + DEBOUNCE_TIME/4;
+              unsigned control_buttons_val;
+              p_control_buttons :> control_buttons_val;
+              if(control_buttons_counter==0) {
+                if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons port value changed to 0x%x\n", control_buttons_val);
+              } else if(control_buttons_counter==1) {
+                if(control_buttons_val != prev_control_buttons_val) { // The button change persistet -> No glitch
+                  if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after 3/4 DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                  control_buttons_pressed = 0; // abort and re-enable guarded event above (case (!control_buttons_pressed))
+                }
+              } else if(control_buttons_counter==2) {
+                if(control_buttons_val == prev_control_buttons_val) { // The button change persistet -> No glitch
+                  printf("Motor Control Buttons pressed. Value: %x\n", control_buttons_val);
+                  int output_val = control_buttons_val | BUTTONS_MARKER;
+                  input_events <: output_val;
+               } else {
+                  if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                  control_buttons_pressed = 0; // abort and re-enable guarded event above (case (!control_buttons_pressed))
+                }
+              } else if(control_buttons_counter>2) {
+                // Have to wait for button release! 
+                // Otherwise pressing for longer than 2*DEBOUNCE_TIME will be considered as button pressed again. 
+                if(control_buttons_val == all_buttons_off) {
+                  control_buttons_pressed = 0; // this will re-enable the case (!control_buttons_pressed)
+                }
+              }
+              prev_control_buttons_val = control_buttons_val;
+              control_buttons_counter += 1;
+              break;
+
+#if ENDSWITCHES_CONNECTED            
+            // Monitor control buttons with temporal statemachine
+            // Endswitches are connected with a cable
+            // Event fires when one or more Endswitches are triggered
+            // Note: When this logic is changed to sample 3 times (like the p_control_buttons logic above) timing errors occur/
+            //       I.e. timer events seem to be missed. Todo: investigate!
+            case (!endswitches_triggered) => p_endswitches when pinsneq(all_ES_off) :> int:
+              // Port value changed which means some switch was pressed or released
+              endswitches_triggered = 1; // activate timer case below
+              endwitch_val_counter = 0;  // reset counter
+              tmr_dbc_es :> t_dbc_es; // update timer
+              break;
+
+            // debounce p_endswitches
+            // When endswitches_triggered was set by the above event, sample p_endswitches after DEBOUNCE_TIME
+            // Then wait another DEBOUNCE_TIME and sample again to see if the value persisted
+            // If value persisted process it.
+            // else re-enable the above event
+            case (endswitches_triggered) =>  tmr_dbc_es when timerafter(t_dbc_es+DEBOUNCE_TIME/2) :> t_dbc_es:
+              unsigned endswitches_val;
+              p_endswitches :> endswitches_val;
+
+              int endswitches_val_persisted = 0;
+              if(endwitch_val_counter==0) {
+                printf("Endswitches triggered. new value 0x%x\n", endswitches_val);
+                prev_endswitches_val = endswitches_val; // store it to compare next time
+              }
+              else if(endwitch_val_counter==1) {
+                if(endswitches_val==prev_endswitches_val) {
+                  printf("Endswitches changed to value 0x%x\n", endswitches_val);
+                  int output_val = endswitches_val | ES_MARKER;
+                  input_events <: output_val;
+                } else {
+                  if(DEBUG_BUTTON_LOGIC) printf("p_endswitches value change ignored. Value 0x%x didn't persist after 2*DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
+                };
+                endswitches_triggered=0; // abort and re-enable guarded event above (case (!endswitches_triggered))
+              }
+              endwitch_val_counter+=1;
+
+              break;
+#endif
+
+        }
+
+    }
+
+
+}
+
+
+void mc_control(client register_if reg, chanend flash_c, streaming chanend input_events_c, chanend get_input_port_c) {
+
+    timer tmr_pos;
+
+    int t_pos;
+
+    unsigned led_val = 0;
+
+    unsigned input_event_val; // encodes the port value in lower 4 bits and port index in upper 4 bits
+
+    char mac_address[6];
+    // Read MAC address:  
+    otp_board_info_get_mac(otp_ports, 0, mac_address);
+    printf("Read MAC Address");
+    for(unsigned i=0; i<6; ++i) printf("0x%x ",mac_address[i]);
+    printf("\n");  
+    // Store lowest byte of Mac address as unique ID controller 
+    char id = mac_address[5];
+    reg.set_register(SYSTEM_ID_REG_OFFSET, id);
+
+    printf("Starting Greenhouse Motor Control Application on Controller with ID 0x%x\n\n", id);
+
     // M1 opening speed: 123cm / 75s = 1.23e6 um / 75s = 16400
     // M1 closing speed: 123cm / 75s = 1.23e6 um / 77s = 15975
-    init_motor(&state_m0, reg, 16400, 15974, 0, flash_c);
-    init_motor(&state_m1, reg, 16400, 15974, 1, flash_c);
+    init_motor(&state_m0, reg, 16400, 15974, 0, flash_c, get_input_port_c);
+    init_motor(&state_m1, reg, 16400, 15974, 1, flash_c, get_input_port_c);
 
     while(1) {
         // input from all input ports and store in prev values
@@ -1012,94 +1138,23 @@ void mc_control(client register_if reg, chanend flash_c) {
               }
               break;
             
-            // Monitor control buttons
-            case (!control_buttons_pressed) => p_control_buttons when pinsneq(all_buttons_off) :> int:
-              // Port value changed which means some button was pressed 
-              control_buttons_pressed = 1; // activate timer case below
-              control_buttons_counter = 0; // reset counter
-              tmr_dbc :> t_dbc; // update timer
-              next_button_sample_time = t_dbc + DEBOUNCE_TIME/4;
-              break;
 
-            // debounce p_control_buttons
-            case (control_buttons_pressed) => tmr_dbc when timerafter(next_button_sample_time) :> t_dbc:
-              next_button_sample_time = t_dbc + DEBOUNCE_TIME/4;
-              unsigned control_buttons_val;
-              p_control_buttons :> control_buttons_val;
-              if(control_buttons_counter==0) {
-                if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons port value changed to 0x%x\n", control_buttons_val);
-              } else if(control_buttons_counter==1) {
-                if(control_buttons_val != prev_control_buttons_val) { // The button change persistet -> No glitch
-                  if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after 3/4 DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
-                  control_buttons_pressed = 0; // abort and re-enable guarded event above (case (!control_buttons_pressed))
-                }
-              } else if(control_buttons_counter==2) {
-                if(control_buttons_val == prev_control_buttons_val) { // The button change persistet -> No glitch
+            case input_events_c :> input_event_val:
+               if((input_event_val&BUTTONS_MARKER) == BUTTONS_MARKER) {
+                  unsigned control_buttons_pressed_val = input_event_val & 0xf; // only 4 LSBs are valid                  
                   // Same value was now sampled 3 times!. Register it now after a total of DEBOUNCE_TIME cycles
-                  unsigned control_buttons_m0 = control_buttons_val & 0b11;
-                  unsigned control_buttons_m1 = (control_buttons_val >> 2) & 0b11;
-                  printf("Motor Control Buttons pressed. Value: %x\n", control_buttons_val);
-                  check_control_buttons_and_update_states(control_buttons_m0, &state_m0, reg, flash_c); 
-                  check_control_buttons_and_update_states(control_buttons_m1, &state_m1, reg, flash_c); 
-                } else {
-                  if(DEBUG_BUTTON_LOGIC) printf("p_control_buttons value change ignored. Value 0x%x didn't persist after DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
-                  control_buttons_pressed = 0; // abort and re-enable guarded event above (case (!control_buttons_pressed))
-                }
-              } else if(control_buttons_counter>2) {
-                // Have to wait for button release! 
-                // Otherwise pressing for longer than 2*DEBOUNCE_TIME will be considered as button pressed again. 
-                if(control_buttons_val == all_buttons_off) {
-                  control_buttons_pressed = 0; // this will re-enable the case (!control_buttons_pressed)
-                }
-              }
-              prev_control_buttons_val = control_buttons_val;
-              control_buttons_counter += 1;
-              break;
-
-#if ENDSWITCHES_CONNECTED            
-            // Endswitches are connected with a cable
-            // Monitor Endswitches. Event fires when one or more Endswitches are triggered
-            // Note: When this logic is changed to sample 3 times (like the p_control_buttons logic above) timing errors occur/
-            //       I.e. timer events seem to be missed. Todo: investigate!
-            case (!endswitches_triggered) => p_endswitches when pinsneq(all_ES_off) :> int:
-              // Port value changed which means some switch was pressed or released
-              endswitches_triggered = 1; // activate timer case below
-              endwitch_val_counter = 0;  // reset counter
-              tmr_dbc_es :> t_dbc_es; // update timer
-              break;
-
-            // debounce p_endswitches
-            // When endswitches_triggered was set by the above event, sample p_endswitches after DEBOUNCE_TIME
-            // Then wait another DEBOUNCE_TIME and sample again to see if the value persisted
-            // If value persisted process it.
-            // else re-enable the above event
-            case (endswitches_triggered) =>  tmr_dbc_es when timerafter(t_dbc_es+DEBOUNCE_TIME/2) :> t_dbc_es:
-              unsigned endswitches_val;
-              p_endswitches :> endswitches_val;
-
-              int endswitches_val_persisted = 0;
-              if(endwitch_val_counter==0) {
-                printf("Endswitches triggered. new value 0x%x\n", endswitches_val);
-                prev_endswitches_val = endswitches_val; // store it to compare next time
-              }
-              else if(endwitch_val_counter==1) {
-                if(endswitches_val==prev_endswitches_val) {
-                  // Value persistet
-                  int endswitches_m0 = endswitches_val & 0b11;
-                  int endswitches_m1 = (endswitches_val >> 2) & 0b11;
-                  printf("Endswitches changed to value 0x%x\n", endswitches_val);
+                  unsigned control_buttons_m0 = control_buttons_pressed_val & 0b11;
+                  unsigned control_buttons_m1 = (control_buttons_pressed_val >> 2) & 0b11;
+                  check_control_buttons_and_update_states(control_buttons_m0, &state_m0, reg, flash_c, get_input_port_c); 
+                  check_control_buttons_and_update_states(control_buttons_m1, &state_m1, reg, flash_c, get_input_port_c); 
+               } else if((input_event_val&ES_MARKER) == ES_MARKER) {
+                  unsigned endswitches_triggered_val = input_event_val & 0xf;
+                  unsigned endswitches_m0 = endswitches_triggered_val & 0b11;
+                  unsigned endswitches_m1 = (endswitches_triggered_val >> 2) & 0b11;
                   check_endswitches_and_update_states(endswitches_m0, &state_m0, reg); // Check that Open and Closed are not triggered at the same time
                   check_endswitches_and_update_states(endswitches_m1, &state_m1, reg); // Check that Open and Closed are not triggered at the same time
-                } else {
-                  if(DEBUG_BUTTON_LOGIC) printf("p_endswitches value change ignored. Value 0x%x didn't persist after 2*DEBOUNCE_TIME and was a glith\n", prev_control_buttons_val);
-                };
-                endswitches_triggered=0; // abort and re-enable guarded event above (case (!endswitches_triggered))
-              }
-              endwitch_val_counter+=1;
-
-              break;
-#endif
-
+               }
+               break;
 
             // Position estimation
             case tmr_pos when timerafter(t_pos+POS_UPDATE_PERIOD_CYCLES) :> t_pos:
@@ -1192,6 +1247,8 @@ int main() {
 
   register_if i_reg;
   chan flash_c;
+  streaming chan input_events;
+  chan get_input_port_c;
   //debug_printf("Starting I2C enabled Motoro Controller\n");
 
 #if ACCESS_ADC_VIA_SPI
@@ -1200,7 +1257,8 @@ int main() {
 
   par {
     on MC_TILE : i2c_control(i_reg);
-    on MC_TILE : mc_control(i_reg, flash_c);
+    on MC_TILE : input_server(input_events, get_input_port_c);
+    on MC_TILE : mc_control(i_reg, flash_c, input_events, get_input_port_c);
     on MC_TILE : flash_server(flash_c);
 
 #if ACCESS_ADC_VIA_SPI

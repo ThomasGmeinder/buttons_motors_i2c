@@ -59,7 +59,8 @@ typedef enum {
     MOTOR_TOO_FAST, // Endswitch was detected before end position is reached (TBD)
     POSITION_UNKNOWN, // Motor is not running. This is detected by no AC current after motor was switched on (in AC_sensor config) 
     OUT_OF_RANGE, // The computed position is outside of the valid range OPEN_POS_MIN..CLOSED_POS_MAX
-    // The remaining errors are only supported in ES configuration:
+    // The remaining errors are only supported in ES configuration. 
+    // Note: If they happen in the AC_sensor configuration this indicates a SW error!
     BOTH_ENDSWITCHES_ON, 
     CLOSED_ES_WHILST_OPENING, // Motor is running in wrong direction or not at all !
     OPEN_ES_WHILST_CLOSING, // Motor is running in wrong direction or not at all!

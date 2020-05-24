@@ -299,6 +299,27 @@ int motor_endswitches_triggered(unsigned endswitches_val, unsigned mask) {
   return 1;
 }
 
+void clear_error(motor_state_s* ms, client register_if reg) {
+
+  if(ms->error == OUT_OF_RANGE) {
+      // Have to validate the position in flash to make sure the error is not re-asserted by init_motor_position_and_error
+      ms->position = CLOSED_POS_ES;
+  }
+
+  // set to NO_ERROR
+  ms->error = NO_ERROR;
+
+  // Set error clear bit
+  uint8_t regval = ms->error | CLEAR_ERROR_BIT;
+
+  int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
+  reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, regval); 
+
+  // make sure error is also cleared in flash
+  ms->update_flash = 1;
+
+}
+
 void register_error(motor_state_s* ms, client register_if reg, motor_error_t err) {
    if(err == ms->error) {
      // ignore if same error is repeatedly set. 
@@ -889,16 +910,19 @@ void monitor_motor_current(motor_state_s* ms, client register_if reg) {
 
 void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c, chanend get_input_port_c) {
 
-  int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
-  // clear all errors on server
+  // clear all severity>0 errors on server
   printf("Clearing Errors for Motor %d\n", ms->prev_error, ms->motor_idx);
-  reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, CLEAR_ERROR_BIT); 
 
   if(get_error_severity(ms->error)>0) { 
+
     // Only clear severity>0 errors. Severity 0 Errors are warnings which are automatically cleared on the Server
     // Also, if this is done whilst Motors are in normal operation (Operator accidentally presses both buttons whilst motor is running)
     // this causes Errors.
-    register_error(ms, reg, NO_ERROR);
+    clear_error(ms, reg);
+    
+    // Delay 1ms to make sure that flash_server has written the flash before it is read again by init_motor_position_and_error
+    delay_us(1000);
+
     // re-initialise. This may cause new errors
     init_motor_position_and_error(ms, reg, flash_c, get_input_port_c);
   }

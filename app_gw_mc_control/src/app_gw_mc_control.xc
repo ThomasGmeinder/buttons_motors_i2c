@@ -299,27 +299,6 @@ int motor_endswitches_triggered(unsigned endswitches_val, unsigned mask) {
   return 1;
 }
 
-void clear_error(motor_state_s* ms, client register_if reg) {
-
-  if(ms->error == OUT_OF_RANGE) {
-      // Have to validate the position in flash to make sure the error is not re-asserted by init_motor_position_and_error
-      ms->position = CLOSED_POS_ES;
-  }
-
-  // set to NO_ERROR
-  ms->error = NO_ERROR;
-
-  // Set error clear bit
-  uint8_t regval = ms->error | CLEAR_ERROR_BIT;
-
-  int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
-  reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, regval); 
-
-  // make sure error is also cleared in flash
-  ms->update_flash = 1;
-
-}
-
 void register_error(motor_state_s* ms, client register_if reg, motor_error_t err) {
    if(err == ms->error) {
      // ignore if same error is repeatedly set. 
@@ -918,7 +897,22 @@ void clear_errors(motor_state_s* ms, client register_if reg, chanend flash_c, ch
     // Only clear severity>0 errors. Severity 0 Errors are warnings which are automatically cleared on the Server
     // Also, if this is done whilst Motors are in normal operation (Operator accidentally presses both buttons whilst motor is running)
     // this causes Errors.
-    clear_error(ms, reg);
+    if(ms->error == OUT_OF_RANGE) {
+        // Have to validate the position in flash to make sure the error is not re-asserted by init_motor_position_and_error
+        ms->position = CLOSED_POS_ES;
+    }
+  
+    // set to NO_ERROR
+    ms->error = NO_ERROR;
+  
+    // Set error clear bit. This will clear all errors on the server after it read the register
+    uint8_t regval = ms->error | CLEAR_ERROR_BIT;
+  
+    int base_reg = ms->motor_idx * NUM_REGS_PER_MOTOR;
+    reg.set_register(base_reg+MOTOR_ERROR_REG_OFFSET, regval); 
+  
+    // make sure error is also cleared in flash
+    ms->update_flash = 1;
     
     // Delay 1ms to make sure that flash_server has written the flash before it is read again by init_motor_position_and_error
     delay_us(1000);
